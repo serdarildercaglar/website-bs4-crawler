@@ -1,0 +1,2718 @@
+
+
+================================================================================
+# Dosya Yolu: ./main.py
+================================================================================
+
+#!/usr/bin/env python3
+"""
+Web Crawler Ana Uygulama
+"""
+import sys
+import os
+import asyncio
+import argparse
+import json
+from typing import Dict, Any, Optional
+import logging
+
+from database.db_manager import DatabaseManager
+from crawler.crawler import WebCrawler
+from utils.logger import setup_logger
+from config.settings import (
+    MAX_CONCURRENT_REQUESTS, MAX_PAGES, MAX_DEPTH, VERIFY_SSL, USE_PROXIES, REQUEST_TIMEOUT
+)
+
+# Global logger
+logger = setup_logger(__name__)
+
+async def run_crawler(args: argparse.Namespace) -> Dict[str, Any]:
+    """
+    Crawler'ı çalıştır
+    
+    Args:
+        args: Komut satırı argümanları
+    
+    Returns:
+        Dict[str, Any]: Tarama sonucu
+    """
+    logger.info(f"Crawler başlatılıyor: {args.url}")
+    
+    # Veritabanı yöneticisini oluştur
+    db_manager = DatabaseManager()
+    
+    # Crawler'ı oluştur
+    crawler = WebCrawler(
+        base_url=args.url,
+        db_manager=db_manager,
+        max_pages=args.max_pages,
+        max_depth=args.max_depth,
+        concurrency=args.concurrency,
+        timeout=args.timeout,
+        verify_ssl=not args.no_verify_ssl,
+        use_proxies=args.use_proxies
+    )
+    
+    try:
+        # Taramayı başlat
+        await crawler.start()
+        
+        # İstatistikleri al
+        stats = await crawler.get_stats()
+        
+        # Veritabanı bağlantısını kapat
+        await db_manager.close()
+        
+        return stats
+    
+    except KeyboardInterrupt:
+        logger.info("Kullanıcı tarafından durduruldu")
+        # Taramayı duraklat
+        await crawler.pause()
+        
+        # İstatistikleri al
+        stats = await crawler.get_stats()
+        
+        # Veritabanı bağlantısını kapat
+        await db_manager.close()
+        
+        return stats
+    
+    except Exception as e:
+        logger.error(f"Hata: {str(e)}")
+        # Veritabanı bağlantısını kapat
+        await db_manager.close()
+        
+        return {"error": str(e)}
+
+async def resume_crawler(args: argparse.Namespace) -> Dict[str, Any]:
+    """
+    Duraklatılmış crawler'ı devam ettir
+    
+    Args:
+        args: Komut satırı argümanları
+    
+    Returns:
+        Dict[str, Any]: Tarama sonucu
+    """
+    logger.info(f"Crawler devam ettiriliyor: {args.url}")
+    
+    # Veritabanı yöneticisini oluştur
+    db_manager = DatabaseManager()
+    
+    # Crawler'ı oluştur
+    crawler = WebCrawler(
+        base_url=args.url,
+        db_manager=db_manager,
+        max_pages=args.max_pages,
+        max_depth=args.max_depth,
+        concurrency=args.concurrency,
+        timeout=args.timeout,
+        verify_ssl=not args.no_verify_ssl,
+        use_proxies=args.use_proxies
+    )
+    
+    try:
+        # Taramayı devam ettir
+        await crawler.resume()
+        
+        # İstatistikleri al
+        stats = await crawler.get_stats()
+        
+        # Veritabanı bağlantısını kapat
+        await db_manager.close()
+        
+        return stats
+    
+    except KeyboardInterrupt:
+        logger.info("Kullanıcı tarafından durduruldu")
+        # Taramayı duraklat
+        await crawler.pause()
+        
+        # İstatistikleri al
+        stats = await crawler.get_stats()
+        
+        # Veritabanı bağlantısını kapat
+        await db_manager.close()
+        
+        return stats
+    
+    except Exception as e:
+        logger.error(f"Hata: {str(e)}")
+        # Veritabanı bağlantısını kapat
+        await db_manager.close()
+        
+        return {"error": str(e)}
+
+def parse_arguments() -> argparse.Namespace:
+    """
+    Komut satırı argümanlarını ayrıştır
+    
+    Returns:
+        argparse.Namespace: Ayrıştırılmış argümanlar
+    """
+    parser = argparse.ArgumentParser(description="Web Crawler")
+    
+    # Alt komutlar
+    subparsers = parser.add_subparsers(dest="command", help="Komut")
+    
+    # 'crawl' komutu
+    crawl_parser = subparsers.add_parser("crawl", help="Yeni bir tarama başlat")
+    crawl_parser.add_argument("url", help="Taranacak URL")
+    crawl_parser.add_argument("--max-pages", type=int, default=MAX_PAGES, help="Maksimum sayfa sayısı")
+    crawl_parser.add_argument("--max-depth", type=int, default=MAX_DEPTH, help="Maksimum tarama derinliği")
+    crawl_parser.add_argument("--concurrency", type=int, default=MAX_CONCURRENT_REQUESTS, help="Eşzamanlı istek sayısı")
+    crawl_parser.add_argument("--timeout", type=int, default=REQUEST_TIMEOUT, help="İstek zaman aşımı (saniye)")
+    crawl_parser.add_argument("--no-verify-ssl", action="store_true", help="SSL sertifikasını doğrulama")
+    crawl_parser.add_argument("--use-proxies", action="store_true", help="Proxy kullan")
+    crawl_parser.add_argument("--output", help="Sonuçları dosyaya yaz")
+    
+    # 'resume' komutu
+    resume_parser = subparsers.add_parser("resume", help="Duraklatılmış bir taramayı devam ettir")
+    resume_parser.add_argument("url", help="Devam ettirilecek taramanın URL'si")
+    resume_parser.add_argument("--max-pages", type=int, default=MAX_PAGES, help="Maksimum sayfa sayısı")
+    resume_parser.add_argument("--max-depth", type=int, default=MAX_DEPTH, help="Maksimum tarama derinliği")
+    resume_parser.add_argument("--concurrency", type=int, default=MAX_CONCURRENT_REQUESTS, help="Eşzamanlı istek sayısı")
+    resume_parser.add_argument("--timeout", type=int, default=REQUEST_TIMEOUT, help="İstek zaman aşımı (saniye)")
+    resume_parser.add_argument("--no-verify-ssl", action="store_true", help="SSL sertifikasını doğrulama")
+    resume_parser.add_argument("--use-proxies", action="store_true", help="Proxy kullan")
+    resume_parser.add_argument("--output", help="Sonuçları dosyaya yaz")
+    
+    # 'stats' komutu
+    stats_parser = subparsers.add_parser("stats", help="Tarama istatistiklerini görüntüle")
+    stats_parser.add_argument("--output", help="Sonuçları dosyaya yaz")
+    
+    args = parser.parse_args()
+    
+    # Komut verilmediyse yardım göster
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+    
+    return args
+
+async def main() -> None:
+    """Ana uygulama fonksiyonu"""
+    # Argümanları ayrıştır
+    args = parse_arguments()
+    
+    # Komutu işle
+    result = None
+    
+    if args.command == "crawl":
+        result = await run_crawler(args)
+    
+    elif args.command == "resume":
+        result = await resume_crawler(args)
+    
+    elif args.command == "stats":
+        # Veritabanı yöneticisini oluştur
+        db_manager = DatabaseManager()
+        # İstatistikleri al
+        result = await db_manager.get_crawl_stats()
+        # Veritabanı bağlantısını kapat
+        await db_manager.close()
+    
+    # Sonuçları göster
+    if result:
+        if args.output:
+            # JSON formatında dosyaya yaz
+            with open(args.output, 'w', encoding='utf-8') as f:
+                json.dump(result, f, ensure_ascii=False, indent=2)
+            logger.info(f"Sonuçlar dosyaya yazıldı: {args.output}")
+        else:
+            # Sonuçları ekrana yazdır
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+
+if __name__ == "__main__":
+    # Windows'ta asyncio event loop politikasını ayarla
+    if sys.platform == 'win32':
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    
+    # Ana fonksiyonu çalıştır
+    asyncio.run(main())
+
+================================================================================
+# Dosya Yolu: ./__init__.py
+================================================================================
+
+
+
+================================================================================
+# Dosya Yolu: ./config/settings.py
+================================================================================
+
+"""
+Web Crawler için ayarlar ve yapılandırma parametreleri
+"""
+import os
+from dotenv import load_dotenv
+
+# .env dosyasını yükle (varsa)
+load_dotenv()
+
+# Veri tabanı ayarları
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///crawler_data.db")
+
+# Crawler ayarları
+MAX_CONCURRENT_REQUESTS = int(os.getenv("MAX_CONCURRENT_REQUESTS", "10"))
+REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "30"))
+RATE_LIMIT = float(os.getenv("RATE_LIMIT", "0.01"))  # Saniye başına istek sayısı
+MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
+BACKOFF_FACTOR = float(os.getenv("BACKOFF_FACTOR", "0.5"))
+VERIFY_SSL = os.getenv("VERIFY_SSL", "True").lower() == "true"
+
+# Proxy ayarları
+USE_PROXIES = os.getenv("USE_PROXIES", "False").lower() == "true"
+PROXIES = os.getenv("PROXIES", "").split(",") if os.getenv("PROXIES") else []
+PROXY_ROTATION_LIMIT = int(os.getenv("PROXY_ROTATION_LIMIT", "50"))
+
+# Crawler davranış ayarları
+MAX_PAGES = int(os.getenv("MAX_PAGES", "0")) or None  # 0 ise tüm sayfalar
+MAX_DEPTH = int(os.getenv("MAX_DEPTH", "0")) or None  # 0 ise sınırsız derinlik
+IMPORTANT_URL_PARAMS = set(os.getenv("IMPORTANT_URL_PARAMS", "id,page,category").split(","))
+
+# Bellek yönetimi
+BATCH_SIZE = int(os.getenv("BATCH_SIZE", "100"))  # Veritabanına toplu yazma için
+
+# İçerik seçiciler
+MAIN_CONTENT_SELECTOR = "section.pages-content"  # Ana içerik için
+HOSPITAL_INFO_SELECTOR = "#header-middle-content"  # Hastane bilgisi için
+
+# Logging
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+LOG_FILE = os.getenv("LOG_FILE", "crawler.log")
+
+# User Agent 
+USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36',
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1',
+    'Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Mobile Safari/537.36',
+]
+
+================================================================================
+# Dosya Yolu: ./crawler/url_manager.py
+================================================================================
+
+"""
+URL yönetimi, normalleştirme ve doğrulama
+"""
+import logging
+import hashlib
+import re
+from typing import List, Set, Dict, Any, Optional
+from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
+
+from config.settings import IMPORTANT_URL_PARAMS
+
+logger = logging.getLogger(__name__)
+
+class URLManager:
+    """URL işlemleri yönetimi"""
+    
+    def __init__(self, base_url: str, important_params: Optional[Set[str]] = None):
+        """
+        URLManager sınıfını başlat
+        
+        Args:
+            base_url: Ana URL
+            important_params: Korunacak URL parametreleri kümesi
+        """
+        self.base_url = base_url
+        self.base_domain = urlparse(base_url).netloc
+        self.important_params = important_params or IMPORTANT_URL_PARAMS
+        self.visited_urls: Set[str] = set()
+        self.visited_hashes: Set[str] = set()
+        self.excluded_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.css', '.js', '.ico', '.svg', '.woff', '.woff2', '.ttf', '.eot'}
+    
+    def normalize_url(self, url: str) -> str:
+        """
+        URL'yi normalleştir
+        
+        Args:
+            url: Normalleştirilecek URL
+        
+        Returns:
+            str: Normalleştirilmiş URL
+        """
+        try:
+            parsed = urlparse(url)
+            
+            # Şemayı ve alan adını küçük harfe çevir
+            scheme = parsed.scheme.lower()
+            netloc = parsed.netloc.lower()
+            
+            # Standart port numaralarını kaldır
+            if (scheme == 'http' and parsed.port == 80) or (scheme == 'https' and parsed.port == 443):
+                netloc = netloc.replace(f':{parsed.port}', '')
+            
+            # Yol dizinlerindeki gereksiz karmaşık kısımları temizle
+            path = parsed.path
+            while '/./' in path:
+                path = path.replace('/./', '/')
+            while '/../' in path:
+                path = path.replace('/../', '/')
+            
+            # Sondaki eğik çizgiyi kaldır (kök dizin dışında)
+            if path != '/' and path.endswith('/'):
+                path = path[:-1]
+            
+            # Gereksiz URL parametrelerini filtrele
+            query_params = parse_qs(parsed.query)
+            filtered_params = {k: v for k, v in query_params.items() if k in self.important_params}
+            sorted_query = urlencode(sorted(filtered_params.items()), doseq=True)
+            
+            # Parçaları birleştir
+            normalized = urlunparse((scheme, netloc, path, parsed.params, sorted_query, ''))
+            return normalized
+        
+        except Exception as e:
+            logger.error(f"URL normalleştirme hatası: {str(e)}")
+            return url
+    
+    def get_url_hash(self, url: str) -> str:
+        """
+        URL için benzersiz bir hash değeri oluştur
+        
+        Args:
+            url: Hash değeri oluşturulacak URL
+        
+        Returns:
+            str: URL'nin hash değeri
+        """
+        normalized_url = self.normalize_url(url)
+        return hashlib.md5(normalized_url.encode()).hexdigest()
+    
+    def is_valid_url(self, url: str) -> bool:
+        """
+        URL'nin geçerli olup olmadığını kontrol et
+        
+        Args:
+            url: Kontrol edilecek URL
+        
+        Returns:
+            bool: URL geçerliyse True, değilse False
+        """
+        try:
+            parsed = urlparse(url)
+            return bool(parsed.netloc) and bool(parsed.scheme)
+        except:
+            return False
+    
+    def is_internal_url(self, url: str) -> bool:
+        """
+        URL'nin iç bağlantı olup olmadığını kontrol et
+        
+        Args:
+            url: Kontrol edilecek URL
+        
+        Returns:
+            bool: İç bağlantıysa True, dış bağlantıysa False
+        """
+        try:
+            parsed = urlparse(url)
+            return parsed.netloc == self.base_domain
+        except:
+            return False
+        
+    def should_crawl(self, url: str) -> bool:
+            """
+            URL'nin taranması gerekip gerekmediğini kontrol et
+            
+            Args:
+                url: Kontrol edilecek URL
+            
+            Returns:
+                bool: Taranması gerekiyorsa True, gerekmiyorsa False
+            """
+            # Özel protokolleri kontrol et
+            if url.startswith(('mailto:', 'tel:', 'sms:', 'whatsapp:', 'intent:', 'javascript:')):
+                return False
+                
+            # URL'nin geçerli olduğunu kontrol et
+            if not self.is_valid_url(url):
+                return False
+            
+            # İç bağlantı olduğunu kontrol et
+            if not self.is_internal_url(url):
+                return False
+            
+            # Daha önce ziyaret edildiğini kontrol et
+            normalized_url = self.normalize_url(url)
+            if normalized_url in self.visited_urls:
+                return False
+            
+            url_hash = self.get_url_hash(url)
+            if url_hash in self.visited_hashes:
+                return False
+            
+            # Dosya uzantısını kontrol et
+            _, ext = self.get_url_extension(url)
+            if ext and ext.lower() in self.excluded_extensions:
+                return False
+            
+            return True
+    
+    def mark_as_visited(self, url: str) -> None:
+        """
+        URL'yi ziyaret edilmiş olarak işaretle
+        
+        Args:
+            url: İşaretlenecek URL
+        """
+        normalized_url = self.normalize_url(url)
+        self.visited_urls.add(normalized_url)
+        
+        url_hash = self.get_url_hash(url)
+        self.visited_hashes.add(url_hash)
+    
+    @staticmethod
+    def get_url_extension(url: str) -> tuple:
+        """
+        URL'nin dosya adını ve uzantısını al
+        
+        Args:
+            url: İşlenecek URL
+        
+        Returns:
+            tuple: (dosya_adı, uzantı) ikilisi
+        """
+        path = urlparse(url).path
+        filename = path.split('/')[-1]
+        
+        # Nokta ile ayrılmış uzantıyı bul
+        match = re.search(r'\.([^./]+)$', filename)
+        if match:
+            extension = f".{match.group(1)}"
+            return filename, extension
+        
+        return filename, ""
+    
+    def filter_urls(self, urls: List[str]) -> List[str]:
+        """
+        URL listesini filtrele
+        
+        Args:
+            urls: Filtrelenecek URL listesi
+        
+        Returns:
+            List[str]: Filtrelenmiş URL listesi
+        """
+        filtered = []
+        
+        for url in urls:
+            if self.should_crawl(url):
+                filtered.append(url)
+        
+        return filtered
+
+================================================================================
+# Dosya Yolu: ./crawler/rate_limiter.py
+================================================================================
+
+"""
+İstek hızı sınırlama ve kontrol
+"""
+import asyncio
+import logging
+import time
+from typing import Dict, Optional
+from urllib.parse import urlparse
+
+logger = logging.getLogger(__name__)
+
+class RateLimiter:
+    """İstek hızını sınırlandırmak için sınıf"""
+    
+    def __init__(self, rate_limit: float = 0.5, domain_specific_limits: Optional[Dict[str, float]] = None):
+        """
+        RateLimiter sınıfını başlat
+        
+        Args:
+            rate_limit: Saniye başına maksimum istek sayısı (varsayılan 0.5, yani 2 saniyede 1)
+            domain_specific_limits: Alan adlarına özel sınırlar (alan adı: saniye başına istek)
+        """
+        self.rate_limit = rate_limit
+        self.domain_specific_limits = domain_specific_limits or {}
+        self.last_request_time: Dict[str, float] = {}
+        self.semaphores: Dict[str, asyncio.Semaphore] = {}
+    
+    async def wait(self, url: str) -> None:
+        """
+        URL'ye istek yapmadan önce gerekirse bekle
+        
+        Args:
+            url: İstek yapılacak URL
+        """
+        domain = urlparse(url).netloc
+        
+        # Alan adına özel semaphore'u al veya oluştur
+        if domain not in self.semaphores:
+            # Her alan adı için maksimum 1 eşzamanlı istek (isteğe bağlı değiştirilebilir)
+            self.semaphores[domain] = asyncio.Semaphore(1)
+        
+        # Alan adına özel hız sınırını kontrol et
+        domain_rate = self.domain_specific_limits.get(domain, self.rate_limit)
+        
+        # Minimum bekleme süresi (saniye)
+        min_wait_time = 1.0 / domain_rate if domain_rate > 0 else 0
+        
+        async with self.semaphores[domain]:
+            # Son istek zamanını kontrol et
+            last_time = self.last_request_time.get(domain, 0)
+            current_time = time.time()
+            
+            # Son istekten beri geçen süre
+            elapsed = current_time - last_time
+            
+            # Gerekirse bekle
+            if elapsed < min_wait_time:
+                wait_time = min_wait_time - elapsed
+                logger.debug(f"{domain} için {wait_time:.2f} saniye bekleniyor...")
+                await asyncio.sleep(wait_time)
+            
+            # Son istek zamanını güncelle
+            self.last_request_time[domain] = time.time()
+    
+    def update_domain_limit(self, domain: str, new_limit: float) -> None:
+        """
+        Alan adına özel hız sınırını güncelle
+        
+        Args:
+            domain: Alan adı
+            new_limit: Saniye başına yeni istek limiti
+        """
+        self.domain_specific_limits[domain] = new_limit
+    
+    async def adaptive_wait(self, url: str, response_time: float, status_code: int) -> None:
+        """
+        Yanıt süresine ve durum koduna göre hız sınırını dinamik olarak ayarla
+        
+        Args:
+            url: İstek yapılan URL
+            response_time: Yanıt süresi (saniye)
+            status_code: HTTP durum kodu
+        """
+        domain = urlparse(url).netloc
+        current_limit = self.domain_specific_limits.get(domain, self.rate_limit)
+        
+        # 429 (Too Many Requests) durum kodu veya yüksek yanıt süresi durumunda hızı düşür
+        if status_code == 429 or response_time > 5.0:
+            new_limit = current_limit * 0.5  # Hızı yarıya düşür
+            self.update_domain_limit(domain, new_limit)
+            logger.warning(f"{domain} için istek limiti düşürüldü: {current_limit:.2f} -> {new_limit:.2f}/sn")
+        
+        # Hızlı yanıt ve başarılı durumda hızı hafifçe artır
+        elif status_code == 200 and response_time < 1.0:
+            # Mevcut limitin 1.1 katına kadar artır (maksimum 1/sn)
+            new_limit = min(current_limit * 1.1, 1.0)
+            if new_limit > current_limit:
+                self.update_domain_limit(domain, new_limit)
+                logger.debug(f"{domain} için istek limiti artırıldı: {current_limit:.2f} -> {new_limit:.2f}/sn")
+
+================================================================================
+# Dosya Yolu: ./crawler/crawler.py
+================================================================================
+
+"""
+Ana web crawler sınıfı
+"""
+import asyncio
+import logging
+import time
+import traceback
+from typing import Dict, List, Set, Any, Optional, Tuple
+from urllib.parse import urljoin
+
+import aiohttp
+from aiohttp import ClientSession, TCPConnector, ClientTimeout
+import xml.etree.ElementTree as ET
+from bs4 import BeautifulSoup
+
+from config.settings import (
+    MAX_CONCURRENT_REQUESTS, REQUEST_TIMEOUT, MAX_RETRIES, 
+    BACKOFF_FACTOR, VERIFY_SSL, USE_PROXIES, BATCH_SIZE
+)
+from crawler.url_manager import URLManager
+from crawler.rate_limiter import RateLimiter
+from database.db_manager import DatabaseManager
+from scraper.html_extractor import HTMLExtractor
+from scraper.pdf_extractor import PDFExtractor
+from utils.proxy_manager import ProxyManager
+from utils.user_agents import UserAgentManager
+from utils.logger import LoggingTimer, setup_logger
+
+logger = setup_logger(__name__)
+
+class WebCrawler:
+    """Web sayfalarını taramak için ana sınıf"""
+    
+    def __init__(
+        self, 
+        base_url: str, 
+        db_manager: DatabaseManager,
+        max_pages: Optional[int] = None, 
+        max_depth: Optional[int] = None,
+        concurrency: int = MAX_CONCURRENT_REQUESTS,
+        timeout: int = REQUEST_TIMEOUT,
+        verify_ssl: bool = VERIFY_SSL,
+        use_proxies: bool = USE_PROXIES
+    ):
+        """
+        WebCrawler sınıfını başlat
+        
+        Args:
+            base_url: Tarama başlangıç URL'si
+            db_manager: Veritabanı yöneticisi
+            max_pages: Maksimum taranacak sayfa sayısı (None: sınırsız)
+            max_depth: Maksimum tarama derinliği (None: sınırsız)
+            concurrency: Eşzamanlı istek sayısı
+            timeout: İstek zaman aşımı (saniye)
+            verify_ssl: SSL sertifikası doğrulama
+            use_proxies: Proxy kullanımı
+        """
+        self.base_url = base_url
+        self.db_manager = db_manager
+        self.max_pages = max_pages
+        self.max_depth = max_depth
+        self.concurrency = concurrency
+        self.timeout = timeout
+        self.verify_ssl = verify_ssl
+        self.use_proxies = use_proxies
+        
+        # Yardımcı sınıfları başlat
+        self.url_manager = URLManager(base_url)
+        self.rate_limiter = RateLimiter()
+        self.proxy_manager = ProxyManager() if use_proxies else None
+        self.user_agent_manager = UserAgentManager()
+        
+        # İçerik çıkarıcıları başlat
+        self.html_extractor = HTMLExtractor()
+        self.pdf_extractor = PDFExtractor()
+        
+        # Durum takibi
+        self.crawled_count = 0
+        self.start_time = None
+        self.end_time = None
+        self.current_session_id = None
+        self.is_running = False
+        self.is_paused = False
+        
+        # İstatistikler
+        self.stats = {
+            'total_urls': 0,
+            'successful': 0,
+            'failed': 0,
+            'http_errors': {},
+            'content_types': {},
+            'avg_response_time': 0,
+            'total_response_time': 0
+        }
+        
+        # Görev ve kuyruk yönetimi
+        self.active_tasks = set()
+        self.url_queue = asyncio.Queue()
+        self.semaphore = asyncio.Semaphore(concurrency)
+    
+    async def start(self) -> None:
+        """Crawler'ı başlat"""
+        if self.is_running:
+            logger.warning("Crawler zaten çalışıyor")
+            return
+        
+        self.is_running = True
+        self.is_paused = False
+        self.start_time = time.time()
+        
+        # Veritabanını başlat
+        await self.db_manager.init_db()
+        
+        # Yeni bir tarama oturumu başlat
+        config = {
+            'base_url': self.base_url,
+            'max_pages': self.max_pages,
+            'max_depth': self.max_depth,
+            'concurrency': self.concurrency,
+            'timeout': self.timeout,
+            'verify_ssl': self.verify_ssl,
+            'use_proxies': self.use_proxies
+        }
+        self.current_session_id = await self.db_manager.start_crawl_session(self.base_url, config)
+        
+        # Başlangıç URL'sini kuyruğa ekle
+        await self.url_queue.put((self.base_url, 0))  # (url, depth)
+        self.stats['total_urls'] += 1
+        
+        logger.info(f"Crawling başlatıldı: {self.base_url}")
+        
+        try:
+            # HTTP oturumunu oluştur
+            conn = TCPConnector(
+                limit=self.concurrency,
+                ssl=None if not self.verify_ssl else True,
+                force_close=True
+            )
+            timeout = ClientTimeout(total=self.timeout)
+            
+            async with ClientSession(connector=conn, timeout=timeout) as session:
+                # Sitemap'i çek (varsa)
+                try:
+                    sitemap_urls = await self.fetch_sitemap(session)
+                    # Sitemap URL'lerini kuyruğa ekle
+                    for url in sitemap_urls:
+                        if not self.url_manager.should_crawl(url):
+                            continue
+                        await self.url_queue.put((url, 0))
+                        self.stats['total_urls'] += 1
+                except Exception as e:
+                    logger.error(f"Sitemap tarama hatası: {str(e)}")
+                
+                # Çalışan işçi görevleri oluştur
+                workers = [self.worker(session, i) for i in range(self.concurrency)]
+                await asyncio.gather(*workers)
+        
+        finally:
+            self.is_running = False
+            self.end_time = time.time()
+            
+            # Tarama oturumunu sonlandır
+            if self.current_session_id:
+                status = 'paused' if self.is_paused else 'completed'
+                await self.db_manager.end_crawl_session(self.current_session_id, status)
+            
+            # İstatistikleri logla
+            self.log_stats()
+    
+    async def worker(self, session: ClientSession, worker_id: int) -> None:
+        """
+        Tarama işçisi
+        
+        Args:
+            session: HTTP oturumu
+            worker_id: İşçi ID'si
+        """
+        logger.debug(f"İşçi {worker_id} başlatıldı")
+        
+        while self.is_running and not self.is_paused:
+            # Kuyruktan bir sonraki URL'yi al
+            try:
+                url, depth = await asyncio.wait_for(self.url_queue.get(), timeout=5)
+            except asyncio.TimeoutError:
+                # Kuyruk boşsa ve tüm işçiler beklemedeyse, taramayı bitir
+                if self.url_queue.empty() and all(t.done() for t in self.active_tasks):
+                    logger.info("Taranacak URL kalmadı, tarama sonlandırılıyor")
+                    self.is_running = False
+                    break
+                continue
+            
+            # Derinlik sınırını kontrol et
+            if self.max_depth is not None and depth > self.max_depth:
+                self.url_queue.task_done()
+                continue
+            
+            # Sayfa sınırını kontrol et
+            if self.max_pages is not None and self.crawled_count >= self.max_pages:
+                logger.info(f"Maksimum sayfa sınırına ulaşıldı: {self.max_pages}")
+                self.url_queue.task_done()
+                self.is_running = False
+                break
+            
+            # URL'yi tekrar kontrol et (başka bir işçi işlemiş olabilir)
+            if not self.url_manager.should_crawl(url):
+                self.url_queue.task_done()
+                continue
+            
+            # Semaforu al (eşzamanlı istek sayısını sınırla)
+            async with self.semaphore:
+                # Hız sınırlayıcıyı bekle
+                await self.rate_limiter.wait(url)
+                
+                # URL'yi işle
+                task = asyncio.create_task(self.process_url(session, url, depth))
+                self.active_tasks.add(task)
+                task.add_done_callback(self.active_tasks.discard)
+                
+                try:
+                    await task
+                except Exception as e:
+                    logger.error(f"URL işleme hatası ({url}): {str(e)}\n{traceback.format_exc()}")
+                
+                self.url_queue.task_done()
+        
+        logger.debug(f"İşçi {worker_id} sonlandırıldı")
+    
+    async def process_url(self, session: ClientSession, url: str, depth: int) -> None:
+        """
+        URL'yi işle
+        
+        Args:
+            session: HTTP oturumu
+            url: İşlenecek URL
+            depth: Mevcut derinlik
+        """
+        logger.debug(f"İşleniyor: {url} (Derinlik: {depth})")
+        
+        # URL'yi ziyaret edilmiş olarak işaretle
+        self.url_manager.mark_as_visited(url)
+        
+        # İçeriği al
+        with LoggingTimer(logger, f"URL çekme ({url})"):
+            response_data = await self.fetch_url(session, url, depth)
+        
+        if not response_data:
+            self.stats['failed'] += 1
+            return
+        
+        # İçeriği işle
+        page_data = response_data.get('content', {})
+        links = page_data.get('links', [])
+        content_type = response_data.get('content_type', 'unknown')
+        status_code = response_data.get('status_code', 0)
+        response_time = response_data.get('response_time', 0)
+        
+        # İstatistikleri güncelle
+        self.crawled_count += 1
+        self.stats['successful'] += 1
+        self.stats['http_errors'][status_code] = self.stats['http_errors'].get(status_code, 0) + 1
+        self.stats['content_types'][content_type] = self.stats['content_types'].get(content_type, 0) + 1
+        self.stats['total_response_time'] += response_time
+        self.stats['avg_response_time'] = self.stats['total_response_time'] / self.stats['successful']
+        
+        # Adaptif hız sınırlama
+        await self.rate_limiter.adaptive_wait(url, response_time, status_code)
+        
+        # Sayfayı veritabanına kaydet
+        page_id = await self.db_manager.save_page(page_data)
+        
+        if not page_id:
+            logger.error(f"Sayfa kaydedilemedi: {url}")
+            return
+        
+        # Bağlantıları işle
+        if links:
+            # Bağlantıları veritabanına kaydet
+            formatted_links = []
+            for link in links:
+                link_url = link.get('url')
+                formatted_links.append({
+                    'url': link_url,
+                    'is_internal': link.get('is_internal', self.url_manager.is_internal_url(link_url)),
+                    'is_crawled': False
+                })
+            
+            await self.db_manager.save_links(page_id, formatted_links)
+            
+            # İç bağlantıları kuyruğa ekle
+            for link in links:
+                link_url = link.get('url')
+                is_internal = link.get('is_internal', self.url_manager.is_internal_url(link_url))
+                
+                if is_internal and self.url_manager.should_crawl(link_url):
+                    await self.url_queue.put((link_url, depth + 1))
+                    self.stats['total_urls'] += 1
+    
+    async def fetch_url(self, session: ClientSession, url: str, depth: int, retries: int = MAX_RETRIES) -> Optional[Dict[str, Any]]:
+        """
+        URL'den içerik getir
+        
+        Args:
+            session: HTTP oturumu
+            url: İçerik getirilecek URL
+            depth: Mevcut derinlik
+            retries: Tekrar deneme sayısı
+        
+        Returns:
+            Optional[Dict[str, Any]]: Getirilen içerik veya None
+        """
+        backoff_factor = BACKOFF_FACTOR
+        headers = self.user_agent_manager.get_headers(referer=self.base_url)
+        proxy = None
+        
+        if self.use_proxies and self.proxy_manager:
+            proxy = await self.proxy_manager.get_next_proxy(session)
+        
+        for attempt in range(retries):
+            start_time = time.time()
+            
+            try:
+                async with session.get(
+                    url, 
+                    headers=headers, 
+                    proxy=proxy,
+                    allow_redirects=True,
+                    ssl=None if not self.verify_ssl else True
+                ) as response:
+                    elapsed = time.time() - start_time
+                    
+                    # Durum kodunu kontrol et
+                    if response.status == 200:
+                        # İçerik türünü al
+                        content_type = response.headers.get('Content-Type', '').lower()
+                        
+                        # İçeriği al
+                        content_data = await self._extract_content(response, url, content_type)
+                        
+                        # Sayfa verilerini oluştur
+                        page_data = {
+                            'url': url,
+                            'status_code': response.status,
+                            'content_type': content_type,
+                            'depth': depth,
+                            'response_time': elapsed,
+                            'content': content_data
+                        }
+                        
+                        return page_data
+                    
+                    elif response.status in {301, 302, 303, 307, 308}:
+                        location = response.headers.get('Location')
+                        if location:
+                            new_url = urljoin(url, location)
+                            logger.info(f"Yönlendirme: {url} -> {new_url}")
+                            
+                            # Yönlendirilen URL'yi işle
+                            if self.url_manager.is_internal_url(new_url) and self.url_manager.should_crawl(new_url):
+                                await self.url_queue.put((new_url, depth))
+                                self.stats['total_urls'] += 1
+                        
+                        return None
+                    
+                    elif response.status in {403, 429}:
+                        logger.warning(f"Erişim engellendi veya hız sınırı aşıldı: {url} (HTTP {response.status})")
+                        
+                        # Proxy'yi başarısız olarak işaretle
+                        if proxy and self.proxy_manager:
+                            self.proxy_manager.mark_proxy_failed(proxy)
+                            proxy = await self.proxy_manager.get_next_proxy(session)
+                        
+                        # Daha uzun bir bekleme süresiyle tekrar dene
+                        wait_time = backoff_factor * (2 ** attempt) + (attempt + 1)
+                        logger.info(f"Tekrar deneniyor: {url} ({attempt + 1}/{retries}, {wait_time} saniye sonra)")
+                        await asyncio.sleep(wait_time)
+                        continue
+                    
+                    else:
+                        logger.warning(f"HTTP hatası: {url} (HTTP {response.status})")
+                        
+                        # Ciddi bir hata ise tekrar deneme
+                        if response.status >= 500:
+                            wait_time = backoff_factor * (2 ** attempt)
+                            logger.info(f"Tekrar deneniyor: {url} ({attempt + 1}/{retries}, {wait_time} saniye sonra)")
+                            await asyncio.sleep(wait_time)
+                            continue
+                        
+                        return {
+                            'url': url,
+                            'status_code': response.status,
+                            'content_type': 'error',
+                            'depth': depth,
+                            'response_time': elapsed,
+                            'content': {
+                                'url': url,
+                                'error': f"HTTP {response.status}"
+                            }
+                        }
+            
+            except Exception as e:
+                # Tüm hataları yakala
+                logger.warning(f"Bağlantı hatası: {url} - {str(e)}")
+                
+                # Proxy'yi başarısız olarak işaretle
+                if proxy and self.proxy_manager:
+                    self.proxy_manager.mark_proxy_failed(proxy)
+                    proxy = await self.proxy_manager.get_next_proxy(session)
+                
+                # Son deneme değilse tekrar dene
+                if attempt < retries - 1:
+                    wait_time = backoff_factor * (2 ** attempt)
+                    logger.info(f"Tekrar deneniyor: {url} ({attempt + 1}/{retries}, {wait_time} saniye sonra)")
+                    await asyncio.sleep(wait_time)
+                    continue
+                
+                return {
+                    'url': url,
+                    'status_code': 0,
+                    'content_type': 'error',
+                    'depth': depth,
+                    'response_time': time.time() - start_time,
+                    'content': {
+                        'url': url,
+                        'error': str(e)
+                    }
+                }
+        
+        # Tüm denemeler başarısız oldu
+        return None
+    
+    async def _extract_content(self, response, url: str, content_type: str) -> Dict[str, Any]:
+        """
+        HTTP yanıtından içeriği çıkar
+        
+        Args:
+            response: HTTP yanıtı
+            url: İçerik getirilen URL
+            content_type: İçerik türü
+        
+        Returns:
+            Dict[str, Any]: Çıkarılan içerik
+        """
+        try:
+            if 'application/pdf' in content_type:
+                # PDF işle
+                content = await response.read()
+                return await self.pdf_extractor.extract_text(content, url)
+            
+            elif 'text/html' in content_type or 'application/xhtml+xml' in content_type:
+                # HTML işle
+                html = await response.text()
+                return self.html_extractor.extract_content(html, url)
+            
+            else:
+                # Desteklenmeyen içerik türü
+                logger.warning(f"Desteklenmeyen içerik türü: {content_type} ({url})")
+                return {
+                    'url': url,
+                    'title': None,
+                    'full_text': None,
+                    'main_content': None,
+                    'hospital_info': None,
+                    'links': [],
+                    'content_type': content_type
+                }
+        
+        except Exception as e:
+            logger.error(f"İçerik çıkarma hatası ({url}): {str(e)}")
+            return {
+                'url': url,
+                'title': None,
+                'full_text': None,
+                'main_content': None,
+                'hospital_info': None,
+                'links': [],
+                'error': str(e)
+            }
+    
+    async def fetch_sitemap(self, session: ClientSession) -> List[str]:
+        """
+        Sitemap'i çek ve URL'leri çıkar
+        
+        Args:
+            session: HTTP oturumu
+        
+        Returns:
+            List[str]: Sitemap'ten çıkarılan URL'ler
+        """
+        sitemap_url = urljoin(self.base_url, '/sitemap.xml')
+        urls = []
+        
+        try:
+            # User-Agent başlığı ekle
+            headers = self.user_agent_manager.get_headers(referer=self.base_url)
+            
+            async with session.get(
+                sitemap_url, 
+                headers=headers,
+                ssl=None if not self.verify_ssl else True
+            ) as response:
+                if response.status != 200:
+                    logger.warning(f"Sitemap bulunamadı: {sitemap_url} (HTTP {response.status})")
+                    # Alternatif sitemap lokasyonlarını dene
+                    alt_locations = [
+                        '/sitemap_index.xml',
+                        '/sitemap.php',
+                        '/sitemap_index.xml.gz',
+                        '/sitemap.xml.gz'
+                    ]
+                    
+                    for alt_loc in alt_locations:
+                        alt_url = urljoin(self.base_url, alt_loc)
+                        try:
+                            async with session.get(alt_url, headers=headers, ssl=None if not self.verify_ssl else True) as alt_response:
+                                if alt_response.status == 200:
+                                    logger.info(f"Alternatif sitemap bulundu: {alt_url}")
+                                    return await self._parse_sitemap_content(await alt_response.text(), alt_url, session)
+                        except Exception:
+                            continue
+                    
+                    return urls
+                
+                content = await response.text()
+                return await self._parse_sitemap_content(content, sitemap_url, session)
+        
+        except Exception as e:
+            logger.error(f"Sitemap çekme hatası: {str(e)}")
+            return urls
+    
+    async def _parse_sitemap_content(self, content: str, sitemap_url: str, session: ClientSession) -> List[str]:
+        """
+        Sitemap içeriğini ayrıştır
+        
+        Args:
+            content: Sitemap içeriği
+            sitemap_url: Sitemap URL'si
+            session: HTTP oturumu
+        
+        Returns:
+            List[str]: Çıkarılan URL'ler
+        """
+        urls = []
+        
+        # XML'i parse et
+        try:
+            root = ET.fromstring(content)
+            # Namespace'leri tespit et
+            nsmap = {}
+            if root.tag.startswith('{'):
+                ns_uri = root.tag.split('}')[0][1:]
+                nsmap['sm'] = ns_uri
+            else:
+                nsmap['sm'] = 'http://www.sitemaps.org/schemas/sitemap/0.9'
+            
+            # Alt sitemap'leri işle
+            sitemaps = root.findall('.//sm:sitemap/sm:loc', nsmap) or root.findall('.//sitemap/loc')
+            for sitemap in sitemaps:
+                sub_sitemap_url = sitemap.text.strip()
+                logger.debug(f"Alt sitemap bulundu: {sub_sitemap_url}")
+                sub_urls = await self._process_sitemap(session, sub_sitemap_url)
+                urls.extend(sub_urls)
+            
+            # URL'leri işle
+            url_nodes = root.findall('.//sm:url/sm:loc', nsmap) or root.findall('.//url/loc')
+            for url_node in url_nodes:
+                url = url_node.text.strip()
+                urls.append(url)
+            
+            logger.info(f"Sitemap'ten {len(urls)} URL çıkarıldı")
+            return urls
+        
+        except ET.ParseError:
+            logger.error(f"Sitemap XML parse hatası: {sitemap_url}")
+            
+            # XML ayrıştırılamadıysa, text modunda ayrıştırma dene
+            try:
+                # Basit bir regex yaklaşımı
+                import re
+                loc_pattern = re.compile(r'<loc[^>]*>(.*?)</loc>', re.IGNORECASE | re.DOTALL)
+                matches = loc_pattern.findall(content)
+                
+                for match in matches:
+                    url = match.strip()
+                    if url.endswith('.xml') or '.xml?' in url:  # Alt sitemap olabilir
+                        sub_urls = await self._process_sitemap(session, url)
+                        urls.extend(sub_urls)
+                    else:
+                        urls.append(url)
+                
+                logger.info(f"Text tabanlı ayrıştırma ile {len(urls)} URL bulundu")
+            except Exception as e:
+                logger.error(f"Text tabanlı sitemap ayrıştırma hatası: {str(e)}")
+            
+            return urls
+        
+        except Exception as e:
+            logger.error(f"Sitemap ayrıştırma hatası: {str(e)}")
+            return urls
+    
+    async def _process_sitemap(self, session: ClientSession, sitemap_url: str) -> List[str]:
+        """
+        Alt sitemap'i işle
+        
+        Args:
+            session: HTTP oturumu
+            sitemap_url: Sitemap URL'si
+        
+        Returns:
+            List[str]: Çıkarılan URL'ler
+        """
+        urls = []
+        
+        try:
+            # Hız sınırlamasına uy
+            await self.rate_limiter.wait(sitemap_url)
+            
+            # User-Agent başlığı ekle
+            headers = self.user_agent_manager.get_headers(referer=self.base_url)
+            
+            async with session.get(
+                sitemap_url, 
+                headers=headers,
+                ssl=None if not self.verify_ssl else True
+            ) as response:
+                if response.status != 200:
+                    logger.warning(f"Alt sitemap alınamadı: {sitemap_url} (HTTP {response.status})")
+                    return urls
+                
+                content = await response.text()
+                return await self._parse_sitemap_content(content, sitemap_url, session)
+        
+        except Exception as e:
+            logger.error(f"Alt sitemap işleme hatası: {str(e)}")
+            return urls
+    
+    def log_stats(self) -> None:
+        """İstatistikleri logla"""
+        duration = self.end_time - self.start_time if self.end_time else time.time() - self.start_time
+        duration_mins = duration / 60
+        
+        logger.info(f"Tarama tamamlandı:")
+        logger.info(f"  Toplam süre: {duration_mins:.2f} dakika")
+        logger.info(f"  Tarama hızı: {self.crawled_count / duration_mins:.2f} sayfa/dakika")
+        logger.info(f"  Toplam URL sayısı: {self.stats['total_urls']}")
+        logger.info(f"  Başarılı: {self.stats['successful']}")
+        logger.info(f"  Başarısız: {self.stats['failed']}")
+        logger.info(f"  Ortalama yanıt süresi: {self.stats['avg_response_time']:.2f} saniye")
+        logger.info(f"  İçerik türleri: {self.stats['content_types']}")
+        logger.info(f"  HTTP hataları: {self.stats['http_errors']}")
+    
+    async def pause(self) -> None:
+        """Taramayı duraklat"""
+        if not self.is_running:
+            logger.warning("Crawler çalışmıyor, durdurulamaz")
+            return
+        
+        logger.info("Tarama duraklatılıyor...")
+        self.is_paused = True
+        
+        # Oturumu duraklat
+        if self.current_session_id:
+            await self.db_manager.pause_crawl_session(self.current_session_id)
+        
+        # İşlemi durdur (isteğe bağlı olarak beklemeden)
+        self.is_running = False
+    
+    async def resume(self) -> None:
+        """Duraklatılmış taramayı devam ettir"""
+        if self.is_running:
+            logger.warning("Crawler zaten çalışıyor")
+            return
+        
+        if not self.is_paused:
+            logger.warning("Crawler duraklatılmamış, devam ettirilemez")
+            return
+        
+        logger.info("Tarama devam ettiriliyor...")
+        
+        # Taranmamış URL'leri veritabanından al
+        uncrawled_links = await self.db_manager.get_uncrawled_links(self.base_url, 1000)
+        
+        if not uncrawled_links:
+            logger.warning("Devam ettirilecek URL bulunamadı")
+            return
+        
+        # Taramayı başlat
+        self.is_paused = False
+        
+        # Taramayı yeniden başlat
+        for url in uncrawled_links:
+            await self.url_queue.put((url, 0))  # Derinlik bilgisi kaybedildi
+            self.stats['total_urls'] += 1
+        
+        logger.info(f"{len(uncrawled_links)} URL ile taramaya devam ediliyor")
+        await self.start()
+    
+    async def get_stats(self) -> Dict[str, Any]:
+        """
+        Anlık istatistikleri al
+        
+        Returns:
+            Dict[str, Any]: İstatistikler
+        """
+        # Veritabanı istatistiklerini al
+        db_stats = await self.db_manager.get_crawl_stats(self.current_session_id)
+        
+        # Proxy istatistiklerini al (kullanılıyorsa)
+        proxy_stats = {}
+        if self.use_proxies and self.proxy_manager:
+            proxy_stats = self.proxy_manager.get_proxy_stats()
+        
+        # Süre hesapla
+        duration = 0
+        if self.start_time:
+            duration = (self.end_time or time.time()) - self.start_time
+        
+        # İstatistikleri birleştir
+        return {
+            'runtime': {
+                'duration_seconds': duration,
+                'duration_minutes': duration / 60,
+                'crawl_rate': self.crawled_count / (duration / 60) if duration > 0 else 0,
+                'is_running': self.is_running,
+                'is_paused': self.is_paused
+            },
+            'crawl': {
+                'pages_crawled': self.crawled_count,
+                'total_urls': self.stats['total_urls'],
+                'successful': self.stats['successful'],
+                'failed': self.stats['failed'],
+                'avg_response_time': self.stats['avg_response_time']
+            },
+            'database': db_stats,
+            'proxy': proxy_stats
+        }
+
+================================================================================
+# Dosya Yolu: ./crawler/__init__.py
+================================================================================
+
+"""
+Crawler modülleri
+"""
+from crawler.crawler import WebCrawler
+from crawler.url_manager import URLManager
+from crawler.rate_limiter import RateLimiter
+
+__all__ = ['WebCrawler', 'URLManager', 'RateLimiter']
+
+================================================================================
+# Dosya Yolu: ./scraper/html_extractor.py
+================================================================================
+
+"""
+HTML içeriklerini işlemek için genişletilmiş fonksiyonlar
+"""
+import logging
+import re
+from typing import Dict, Any, List, Tuple, Optional
+from bs4 import BeautifulSoup
+
+from scraper.content_extractor import ContentExtractor
+from config.settings import MAIN_CONTENT_SELECTOR, HOSPITAL_INFO_SELECTOR
+
+logger = logging.getLogger(__name__)
+
+import re
+
+def clean_text(self, text: str) -> str:
+    """
+    Metni temizle ancak kelime aralarındaki boşlukları koru
+    """
+    if not text:
+        return ""
+    
+    # HTML etiketlerini boşluklarla değiştir (silmek yerine)
+    text = re.sub(r'<[^>]+>', ' ', text)
+    
+    # Satır sonlarını boşluklara dönüştür ama tamamen kaldırma
+    # Bu sayede kelimeler satır sonlarında birleşmeyecek
+    text = text.replace('\n', ' ')
+    
+    # Çoklu boşlukları tek boşluğa indirgeme (isteğe bağlı)
+    # text = re.sub(r'\s{2,}', ' ', text)
+    
+    # Noktalama işaretlerinden sonra boşluk ekleyin
+    # Ama zaten boşluk varsa eklemeyin
+    text = re.sub(r'([.,!?:;])([^\s])', r'\1 \2', text)
+    
+    return text
+
+
+class HTMLExtractor(ContentExtractor):
+    """HTML sayfalarını işlemek için gelişmiş sınıf"""
+    
+    def __init__(self, main_content_selector: str = MAIN_CONTENT_SELECTOR, 
+                 hospital_info_selector: str = HOSPITAL_INFO_SELECTOR):
+        """
+        HTMLExtractor sınıfını başlat
+        
+        Args:
+            main_content_selector: Ana içeriği seçmek için CSS seçici
+            hospital_info_selector: Hastane bilgisini seçmek için CSS seçici
+        """
+        super().__init__(main_content_selector, hospital_info_selector)
+    
+    def extract_content(self, html: str, url: str) -> Dict[str, Any]:
+        try:
+            soup = BeautifulSoup(html, 'html.parser')
+            
+            # Script ve stil içeriklerini kaldır
+            for script_or_style in soup(['script', 'style', 'noscript', 'iframe']):
+                script_or_style.decompose()
+            
+            # Sayfa başlığını al
+            title = None
+            title_tag = soup.find('title')
+            if title_tag:
+                title = title_tag.get_text(strip=True)
+            
+            # Ana içeriği ve hastane bilgisini al
+            main_content, hospital_info = self._extract_specific_content(soup)
+            
+            # İçeriği temizle ve düzenle
+            if main_content:
+                main_content = self.clean_text(main_content)
+            
+            if hospital_info:
+                hospital_info = self.clean_text(hospital_info)
+            
+            # Tüm metni al
+            full_text = soup.get_text(separator='\n', strip=True)
+            full_text = self.clean_text(full_text)
+            
+            # Bağlantıları çıkar
+            links = self._extract_links(soup, url)
+            
+            return {
+                'title': title,
+                'full_text': full_text,
+                'main_content': main_content,
+                'hospital_info': hospital_info,
+                'links': links,
+                'url': url
+            }
+        
+        except Exception as e:
+            logger.error(f"İçerik çıkarma hatası ({url}): {str(e)}")
+            return {
+                'title': None,
+                'full_text': None,
+                'main_content': None,
+                'hospital_info': None,
+                'links': [],
+                'url': url,
+                'error': str(e)
+            }
+    
+    @staticmethod
+    def _extract_meta_description(soup: BeautifulSoup) -> Optional[str]:
+        """
+        Meta açıklama etiketini çıkar
+        
+        Args:
+            soup: BeautifulSoup nesnesi
+        
+        Returns:
+            Optional[str]: Meta açıklama veya bulunamazsa None
+        """
+        meta_tag = soup.find('meta', attrs={'name': 'description'}) or soup.find('meta', attrs={'property': 'og:description'})
+        if meta_tag and 'content' in meta_tag.attrs:
+            return meta_tag['content']
+        return None
+    
+    @staticmethod
+    def _extract_meta_keywords(soup: BeautifulSoup) -> Optional[str]:
+        """
+        Meta anahtar kelimeler etiketini çıkar
+        
+        Args:
+            soup: BeautifulSoup nesnesi
+        
+        Returns:
+            Optional[str]: Meta anahtar kelimeler veya bulunamazsa None
+        """
+        meta_tag = soup.find('meta', attrs={'name': 'keywords'})
+        if meta_tag and 'content' in meta_tag.attrs:
+            return meta_tag['content']
+        return None
+    
+    @staticmethod
+    def _extract_headings(soup: BeautifulSoup) -> List[Dict[str, Any]]:
+        """
+        Başlık etiketlerini çıkar
+        
+        Args:
+            soup: BeautifulSoup nesnesi
+        
+        Returns:
+            List[Dict[str, Any]]: Başlık listesi
+        """
+        headings = []
+        for level in range(1, 7):
+            for heading in soup.find_all(f'h{level}'):
+                headings.append({
+                    'level': level,
+                    'text': heading.get_text(strip=False)
+                })
+        return headings
+    
+    @staticmethod
+    def _extract_images(soup: BeautifulSoup, base_url: str) -> List[Dict[str, Any]]:
+        """
+        Görsel etiketlerini ve meta verilerini çıkar
+        
+        Args:
+            soup: BeautifulSoup nesnesi
+            base_url: Baz URL
+        
+        Returns:
+            List[Dict[str, Any]]: Görsel listesi
+        """
+        from urllib.parse import urljoin
+        
+        images = []
+        for img in soup.find_all('img'):
+            # Görsel URL'sini al
+            src = img.get('src', '')
+            if not src:
+                continue
+            
+            # Tam URL oluştur
+            full_url = urljoin(base_url, src)
+            
+            # Görsel meta verilerini al
+            alt_text = img.get('alt', '')
+            title = img.get('title', '')
+            
+            images.append({
+                'url': full_url,
+                'alt': alt_text,
+                'title': title
+            })
+        
+        return images
+    
+    # @staticmethod
+    #     def clean_text(text: str) -> str:
+    #     """
+    #     Metni temizle ve düzenle, bitişik kelimeleri ayır
+        
+    #     Args:
+    #         text: Temizlenecek metin
+        
+    #     Returns:
+    #         str: Temizlenmiş metin
+    #     """
+    #     if not text:
+    #         return ""
+        
+    #     # Önce yeni satırları boşluklarla değiştir
+    #     text = text.replace('\n', ' ')
+        
+    #     # HTML etiketleri kaldır (eğer varsa)
+    #     text = re.sub(r'<[^>]+>', ' ', text)
+        
+    #     # Sayıdan sonra gelen büyük harfli kelimeleri ayır (tarihler için)
+    #     text = re.sub(r'(\d+)([A-ZÇĞİÖŞÜ][a-zçğıöşü])', r'\1 \2', text)
+        
+    #     # Küçük harften sonra gelen büyük harfli kelimeleri ayır
+    #     text = re.sub(r'([a-zçğıöşü])([A-ZÇĞİÖŞÜ])', r'\1 \2', text)
+        
+    #     # Doktor, uzman gibi kısaltmalardan sonra boşluk ekle
+    #     text = re.sub(r'\b(Dr|Uzm|Prof|Doç)\.\s*([A-ZÇĞİÖŞÜ])', r'\1. \2', text)
+        
+    #     # Noktalama işaretlerinden sonra boşluk ekle
+    #     text = re.sub(r'([.,!?:;])([^\s])', r'\1 \2', text)
+        
+    #     # Birden fazla boşluğu tek boşluğa indir
+    #     text = re.sub(r'\s+', ' ', text)
+        
+    #     return text # .strip()
+
+
+
+
+    def extract_structured_data(self, html: str) -> Dict[str, Any]:
+        """
+        HTML'deki yapılandırılmış verileri çıkar (JSON-LD, microdata vb.)
+        
+        Args:
+            html: HTML içeriği
+        
+        Returns:
+            Dict[str, Any]: Yapılandırılmış veriler
+        """
+        try:
+            soup = BeautifulSoup(html, 'html.parser')
+            structured_data = {}
+            
+            # JSON-LD verilerini çıkar
+            json_ld_scripts = soup.find_all('script', type='application/ld+json')
+            if json_ld_scripts:
+                import json
+                json_ld_data = []
+                
+                for script in json_ld_scripts:
+                    try:
+                        json_content = script.string
+                        if json_content:
+                            data = json.loads(json_content)
+                            json_ld_data.append(data)
+                    except json.JSONDecodeError:
+                        continue
+                
+                if json_ld_data:
+                    structured_data['json_ld'] = json_ld_data
+            
+            # OpenGraph verilerini çıkar
+            og_tags = soup.find_all('meta', property=lambda x: x and x.startswith('og:'))
+            if og_tags:
+                og_data = {}
+                for tag in og_tags:
+                    if 'content' in tag.attrs and 'property' in tag.attrs:
+                        property_name = tag['property'][3:]  # 'og:' kısmını kaldır
+                        og_data[property_name] = tag['content']
+                
+                if og_data:
+                    structured_data['open_graph'] = og_data
+            
+            # Twitter card verilerini çıkar
+            twitter_tags = soup.find_all('meta', attrs={'name': lambda x: x and x.startswith('twitter:')})
+            if twitter_tags:
+                twitter_data = {}
+                for tag in twitter_tags:
+                    if 'content' in tag.attrs and 'name' in tag.attrs:
+                        property_name = tag['name'][8:]  # 'twitter:' kısmını kaldır
+                        twitter_data[property_name] = tag['content']
+                
+                if twitter_data:
+                    structured_data['twitter_card'] = twitter_data
+            
+            return structured_data
+            
+        except Exception as e:
+            logger.error(f"Yapılandırılmış veri çıkarma hatası: {str(e)}")
+            return {}
+
+================================================================================
+# Dosya Yolu: ./scraper/pdf_extractor.py
+================================================================================
+
+"""
+PDF dosyalarından metin çıkarma işlemleri
+"""
+import logging
+import fitz  # PyMuPDF
+from typing import Dict, Any, Optional
+
+logger = logging.getLogger(__name__)
+
+class PDFExtractor:
+    """PDF'lerden metin çıkarmak için sınıf"""
+    
+    def __init__(self):
+        """PDFExtractor sınıfını başlat"""
+        pass
+    
+    async def extract_text(self, pdf_content: bytes, url: str) -> Dict[str, Any]:
+        """
+        PDF içeriğinden metni çıkar
+        
+        Args:
+            pdf_content: PDF dosyasının içeriği (bytes)
+            url: PDF'nin URL'si
+        
+        Returns:
+            Dict[str, Any]: Çıkarılan içerik
+        """
+        try:
+            with fitz.open(stream=pdf_content, filetype="pdf") as doc:
+                # Tüm sayfaları birleştir
+                full_text = ""
+                metadata = {}
+                toc = []
+                structure = []
+                
+                # Meta bilgileri al
+                metadata = self._extract_metadata(doc)
+                
+                # İçindekiler tablosunu al
+                toc = doc.get_toc()
+                
+                # Her sayfanın içeriğini ve yapısını çıkar
+                for page_num, page in enumerate(doc):
+                    # Sayfa metnini al
+                    page_text = page.get_text()
+                    full_text += page_text + "\n\n"
+                    
+                    # Sayfa yapısı hakkında bilgi topla
+                    structure.append({
+                        'page_number': page_num + 1,
+                        'text_length': len(page_text)
+                    })
+                
+                return {
+                    'title': metadata.get('title', None),
+                    'full_text': full_text,
+                    'main_content': full_text,  # PDF'ler için ana içerik tüm metindir
+                    'hospital_info': None,  # PDF'lerde hastane bilgisi belirtilmiyor
+                    'links': [],  # PDF'lerde bağlantı çıkarmıyoruz
+                    'url': url,
+                    'metadata': metadata,
+                    'toc': toc,
+                    'structure': structure,
+                    'content_type': 'application/pdf'
+                }
+        
+        except Exception as e:
+            logger.error(f"PDF metin çıkarma hatası ({url}): {str(e)}")
+            return {
+                'title': None,
+                'full_text': None,
+                'main_content': None,
+                'hospital_info': None,
+                'links': [],
+                'url': url,
+                'error': str(e),
+                'content_type': 'application/pdf'
+            }
+    
+    @staticmethod
+    def _extract_metadata(doc) -> dict:
+        """
+        PDF belgesinden meta verileri çıkar
+        
+        Args:
+            doc: PyMuPDF belge nesnesi
+        
+        Returns:
+            dict: Meta veriler
+        """
+        metadata = {
+            'title': doc.metadata.get('title', None),
+            'author': doc.metadata.get('author', None),
+            'subject': doc.metadata.get('subject', None),
+            'keywords': doc.metadata.get('keywords', None),
+            'creator': doc.metadata.get('creator', None),
+            'producer': doc.metadata.get('producer', None),
+            'creation_date': doc.metadata.get('creationDate', None),
+            'modification_date': doc.metadata.get('modDate', None),
+            'page_count': len(doc)
+        }
+        
+        return metadata
+
+================================================================================
+# Dosya Yolu: ./scraper/__init__.py
+================================================================================
+
+"""
+Scraper modülleri
+"""
+from scraper.content_extractor import ContentExtractor
+from scraper.html_extractor import HTMLExtractor
+from scraper.pdf_extractor import PDFExtractor
+
+__all__ = ['ContentExtractor', 'HTMLExtractor', 'PDFExtractor']
+
+================================================================================
+# Dosya Yolu: ./scraper/content_extractor.py
+================================================================================
+
+"""
+Web sayfalarından içerik çıkarma işlemleri
+"""
+import logging
+from typing import Dict, Any, Optional, Tuple
+from bs4 import BeautifulSoup
+
+from config.settings import MAIN_CONTENT_SELECTOR, HOSPITAL_INFO_SELECTOR
+
+logger = logging.getLogger(__name__)
+
+class ContentExtractor:
+    """Web sayfalarından içerik çıkarmak için temel sınıf"""
+    
+    def __init__(self, main_content_selector: str = MAIN_CONTENT_SELECTOR, 
+                 hospital_info_selector: str = HOSPITAL_INFO_SELECTOR):
+        """
+        ContentExtractor sınıfını başlat
+        
+        Args:
+            main_content_selector: Ana içeriği seçmek için CSS seçici
+            hospital_info_selector: Hastane bilgisini seçmek için CSS seçici
+        """
+        self.main_content_selector = main_content_selector
+        self.hospital_info_selector = hospital_info_selector
+    
+    def extract_content(self, html: str, url: str) -> Dict[str, Any]:
+        """
+        HTML içeriğinden metinleri çıkar
+        
+        Args:
+            html: HTML içeriği
+            url: Sayfanın URL'si
+        
+        Returns:
+            Dict[str, Any]: Çıkarılan içerik
+        """
+        try:
+            soup = BeautifulSoup(html, 'html.parser')
+            
+            # Script ve stil içeriklerini kaldır
+            for script_or_style in soup(['script', 'style', 'noscript', 'iframe']):
+                script_or_style.decompose()
+            
+            # Sayfa başlığını al
+            title = None
+            title_tag = soup.find('title')
+            if title_tag:
+                title = title_tag.get_text(strip=True)
+            
+            # Ana içeriği ve hastane bilgisini al
+            main_content, hospital_info = self._extract_specific_content(soup)
+            
+            # Tüm metni al
+            full_text = soup.get_text(separator='\n', strip=False)
+            
+            # Bağlantıları çıkar
+            links = self._extract_links(soup, url)
+            
+            return {
+                'title': title,
+                'full_text': full_text,
+                'main_content': main_content,
+                'hospital_info': hospital_info,
+                'links': links,
+                'url': url
+            }
+        
+        except Exception as e:
+            logger.error(f"İçerik çıkarma hatası ({url}): {str(e)}")
+            return {
+                'title': None,
+                'full_text': None,
+                'main_content': None,
+                'hospital_info': None,
+                'links': [],
+                'url': url,
+                'error': str(e)
+            }
+
+                
+    def _extract_specific_content(self, soup: BeautifulSoup) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Belirli içerikleri çıkarırken kelimelerin birleşmemesini sağla
+        """
+        main_content = None
+        hospital_info = None
+        
+        # Ana içeriği çıkar
+        if self.main_content_selector:
+            main_content_element = soup.select_one(self.main_content_selector)
+            if main_content_element:
+                # HTML içindeki metin düğümlerini topla ve aralarında boşluk bırak
+                texts = []
+                for elem in main_content_element.find_all(text=True):
+                    if elem.strip():
+                        texts.append(elem.strip())
+                
+                # Metin parçalarını birleştir, ancak boşluk ekleyerek
+                main_content = " ".join(texts)
+        
+        # Hastane bilgisini çıkar
+        if self.hospital_info_selector:
+            hospital_info_element = soup.select_one(self.hospital_info_selector)
+            if hospital_info_element:
+                # HTML içindeki metin düğümlerini topla ve aralarında boşluk bırak
+                texts = []
+                for elem in hospital_info_element.find_all(text=True):
+                    if elem.strip():
+                        texts.append(elem.strip())
+                
+                # Metin parçalarını birleştir, ancak boşluk ekleyerek
+                hospital_info = " ".join(texts)
+        
+        return main_content, hospital_info
+    
+    @staticmethod
+    def _extract_links(soup: BeautifulSoup, base_url: str) -> list:
+        """
+        HTML'den bağlantıları çıkar
+        
+        Args:
+            soup: BeautifulSoup nesnesi
+            base_url: Baz URL
+        
+        Returns:
+            list: Bağlantı listesi
+        """
+        from urllib.parse import urljoin, urlparse
+        
+        links = []
+        
+        # Tüm <a> etiketlerini işle
+        for a_tag in soup.find_all('a', href=True):
+            href = a_tag.get('href', '')#.strip()
+            
+            # Boş veya javascript bağlantılarını atla
+            if not href or href.startswith('javascript:') or href.startswith('#'):
+                continue
+            
+            # Tam URL oluştur
+            full_url = urljoin(base_url, href)
+            
+            # İç veya dış bağlantı mı kontrol et
+            is_internal = urlparse(base_url).netloc == urlparse(full_url).netloc
+            
+            # Bağlantı metnini al
+            link_text = a_tag.get_text(strip=False)
+            
+            links.append({
+                'url': full_url,
+                'text': link_text,
+                'is_internal': is_internal
+            })
+        
+        return links
+
+================================================================================
+# Dosya Yolu: ./utils/proxy_manager.py
+================================================================================
+
+"""
+Proxy yönetimi için yardımcı sınıflar ve fonksiyonlar
+"""
+import asyncio
+import logging
+import random
+from typing import List, Optional, Set, Dict
+from urllib.parse import urlparse
+
+import aiohttp
+from aiohttp import ClientSession
+
+from config.settings import PROXIES, PROXY_ROTATION_LIMIT
+
+logger = logging.getLogger(__name__)
+
+class ProxyManager:
+    """Proxy rotasyonu ve yönetimi için sınıf"""
+    
+    def __init__(self, proxies: List[str] = None, rotation_limit: int = PROXY_ROTATION_LIMIT):
+        """
+        ProxyManager sınıfını başlat
+        
+        Args:
+            proxies: Kullanılacak proxy listesi ("ip:port:username:password" formatında)
+            rotation_limit: Kaç istekte bir proxy değişeceği
+        """
+        self.proxies = proxies or PROXIES
+        self.rotation_limit = rotation_limit
+        self.current_index = 0
+        self.rotation_count = 0
+        self.failed_proxies: Set[str] = set()
+        self.working_proxies: Dict[str, int] = {}  # proxy: başarı sayısı
+    
+    async def check_proxy(self, session: ClientSession, proxy_url: str) -> bool:
+        """
+        Proxy'nin çalışıp çalışmadığını kontrol et
+        
+        Args:
+            session: aiohttp oturumu
+            proxy_url: Kontrol edilecek proxy URL'si
+        
+        Returns:
+            bool: Proxy çalışıyorsa True, aksi halde False
+        """
+        try:
+            async with session.get('http://httpbin.org/ip', proxy=proxy_url, timeout=5) as response:
+                if response.status == 200:
+                    # Çalışan proxy'lere başarı puanı ekle
+                    self.working_proxies[proxy_url] = self.working_proxies.get(proxy_url, 0) + 1
+                    return True
+        except Exception as e:
+            logger.debug(f"Proxy kontrol hatası ({proxy_url}): {str(e)}")
+            pass
+        return False
+    
+    async def format_proxy_url(self, proxy_string: str) -> Optional[str]:
+        """
+        Ham proxy dizesini URL formatına dönüştür
+        
+        Args:
+            proxy_string: "ip:port:username:password" formatında proxy dizesi
+        
+        Returns:
+            Optional[str]: Proxy URL'si veya hata durumunda None
+        """
+        try:
+            parts = proxy_string.split(':')
+            if len(parts) == 2:  # Sadece IP:PORT
+                ip, port = parts
+                return f"http://{ip}:{port}"
+            elif len(parts) == 4:  # IP:PORT:USERNAME:PASSWORD
+                ip, port, username, password = parts
+                return f"http://{username}:{password}@{ip}:{port}"
+            else:
+                logger.warning(f"Geçersiz proxy formatı: {proxy_string}")
+                return None
+        except Exception as e:
+            logger.error(f"Proxy URL oluşturma hatası: {str(e)}")
+            return None
+    
+    async def get_next_proxy(self, session: ClientSession = None) -> Optional[str]:
+        """
+        Bir sonraki çalışan proxy'yi döndür
+        
+        Args:
+            session: aiohttp oturumu (opsiyonel)
+        
+        Returns:
+            Optional[str]: Proxy URL'si veya kullanılabilir proxy yoksa None
+        """
+        if not self.proxies or len(self.failed_proxies) >= len(self.proxies):
+            logger.warning("Kullanılabilir proxy bulunamadı")
+            return None
+        
+        # Otomatik rotasyon sınırına ulaşıldı mı?
+        self.rotation_count += 1
+        if self.rotation_count >= self.rotation_limit:
+            self.rotation_count = 0
+            self.current_index = (self.current_index + 1) % len(self.proxies)
+        
+        # Çalıştığı bilinen proxy'leri öncelikle kullan
+        if self.working_proxies and random.random() < 0.8:  # %80 ihtimalle çalışan proxy kullan
+            working_proxies = sorted(self.working_proxies.items(), key=lambda x: x[1], reverse=True)
+            if working_proxies:
+                return working_proxies[0][0]
+        
+        # Başarısız olmayan bir sonraki proxy'yi bul
+        attempts = 0
+        max_attempts = len(self.proxies)
+        
+        while attempts < max_attempts:
+            proxy_string = self.proxies[self.current_index]
+            self.current_index = (self.current_index + 1) % len(self.proxies)
+            
+            if proxy_string in self.failed_proxies:
+                attempts += 1
+                continue
+            
+            proxy_url = await self.format_proxy_url(proxy_string)
+            if not proxy_url:
+                self.failed_proxies.add(proxy_string)
+                attempts += 1
+                continue
+            
+            # İlk kullanımda proxy'yi test et
+            if session and proxy_url not in self.working_proxies:
+                if await self.check_proxy(session, proxy_url):
+                    return proxy_url
+                else:
+                    self.failed_proxies.add(proxy_string)
+                    attempts += 1
+                    continue
+            
+            return proxy_url
+        
+        return None
+    
+    def mark_proxy_failed(self, proxy_url: str) -> None:
+        """
+        Bir proxy'yi başarısız olarak işaretle
+        
+        Args:
+            proxy_url: Başarısız proxy URL'si
+        """
+        for proxy_string in self.proxies:
+            if proxy_url.endswith(proxy_string.split(':')[0]):
+                self.failed_proxies.add(proxy_string)
+                if proxy_url in self.working_proxies:
+                    del self.working_proxies[proxy_url]
+                break
+    
+    def get_proxy_stats(self) -> Dict:
+        """
+        Proxy kullanım istatistiklerini döndür
+        
+        Returns:
+            Dict: Proxy istatistikleri
+        """
+        return {
+            "total_proxies": len(self.proxies),
+            "failed_proxies": len(self.failed_proxies),
+            "working_proxies": len(self.working_proxies)
+        }
+
+================================================================================
+# Dosya Yolu: ./utils/user_agents.py
+================================================================================
+
+"""
+User-Agent yönetimi için yardımcı sınıflar ve fonksiyonlar
+"""
+import random
+from typing import List
+
+from config.settings import USER_AGENTS
+
+class UserAgentManager:
+    """User-Agent rotasyonu için sınıf"""
+    
+    def __init__(self, user_agents: List[str] = None):
+        """
+        UserAgentManager sınıfını başlat
+        
+        Args:
+            user_agents: Kullanılacak User-Agent listesi
+        """
+        self.user_agents = user_agents or USER_AGENTS
+        self.current_index = 0
+    
+    def get_random(self) -> str:
+        """
+        Rastgele bir User-Agent döndür
+        
+        Returns:
+            str: Rastgele User-Agent
+        """
+        return random.choice(self.user_agents)
+    
+    def get_next(self) -> str:
+        """
+        Sıradaki User-Agent'ı döndür
+        
+        Returns:
+            str: Sıradaki User-Agent
+        """
+        agent = self.user_agents[self.current_index]
+        self.current_index = (self.current_index + 1) % len(self.user_agents)
+        return agent
+    
+    def get_headers(self, referer: str = None) -> dict:
+        """
+        HTTP istekleri için header'ları oluştur
+        
+        Args:
+            referer: İsteğin kaynağı (opsiyonel)
+        
+        Returns:
+            dict: HTTP header'ları
+        """
+        headers = {
+            'User-Agent': self.get_next(),
+            'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Cache-Control': 'max-age=0',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Pragma': 'no-cache'
+        }
+        
+        if referer:
+            headers['Referer'] = referer
+        
+        return headers
+
+================================================================================
+# Dosya Yolu: ./utils/logger.py
+================================================================================
+
+"""
+Loglama sistemi için yardımcı fonksiyonlar
+"""
+import logging
+import os
+import time
+from logging.handlers import RotatingFileHandler
+
+from config.settings import LOG_LEVEL, LOG_FILE
+
+def setup_logger(name, log_file=LOG_FILE, level=LOG_LEVEL):
+    """
+    Özelleştirilmiş bir logger oluşturur
+    
+    Args:
+        name: Logger adı
+        log_file: Log dosyası yolu
+        level: Log seviyesi (INFO, DEBUG, vb.)
+    
+    Returns:
+        Logger: Yapılandırılmış logger nesnesi
+    """
+    # Log klasörünü oluştur
+    log_dir = os.path.dirname(log_file)
+    if log_dir and not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+    
+    # Log seviyesini belirle
+    level_map = {
+        'DEBUG': logging.DEBUG,
+        'INFO': logging.INFO,
+        'WARNING': logging.WARNING,
+        'ERROR': logging.ERROR,
+        'CRITICAL': logging.CRITICAL
+    }
+    log_level = level_map.get(level.upper(), logging.INFO)
+    
+    # Logger'ı yapılandır
+    logger = logging.getLogger(name)
+    logger.setLevel(log_level)
+    
+    # Log dosyasına yazmak için handler
+    file_handler = RotatingFileHandler(
+        log_file, 
+        maxBytes=10*1024*1024,  # 10 MB
+        backupCount=5
+    )
+    
+    # Konsola yazmak için handler
+    console_handler = logging.StreamHandler()
+    
+    # Format belirle
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    console_handler.setFormatter(formatter)
+    
+    # Handler'ları ekle
+    if not logger.handlers:
+        logger.addHandler(file_handler)
+        logger.addHandler(console_handler)
+    
+    return logger
+
+
+class LoggingTimer:
+    """İşlem süresini ölçmek ve loglamak için yardımcı sınıf"""
+    
+    def __init__(self, logger, operation_name="Operation"):
+        """
+        LoggingTimer sınıfını başlat
+        
+        Args:
+            logger: Logger nesnesi
+            operation_name: Loglarda gösterilecek işlem adı
+        """
+        self.logger = logger
+        self.operation_name = operation_name
+        self.start_time = None
+    
+    def __enter__(self):
+        """Context manager başlangıcı"""
+        self.start_time = time.time()
+        self.logger.debug(f"{self.operation_name} başladı")
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager bitişi"""
+        duration = time.time() - self.start_time
+        if exc_type:
+            self.logger.error(f"{self.operation_name} hata ile sonlandı: {exc_val}, Süre: {duration:.2f} saniye")
+        else:
+            self.logger.debug(f"{self.operation_name} tamamlandı, Süre: {duration:.2f} saniye")
+
+================================================================================
+# Dosya Yolu: ./utils/__init__.py
+================================================================================
+
+"""
+Yardımcı modüller
+"""
+from utils.logger import setup_logger, LoggingTimer
+from utils.proxy_manager import ProxyManager
+from utils.user_agents import UserAgentManager
+
+__all__ = ['setup_logger', 'LoggingTimer', 'ProxyManager', 'UserAgentManager']
+
+
+================================================================================
+# Dosya Yolu: ./database/models.py
+================================================================================
+
+"""
+Veritabanı modelleri ve ORM tanımlamaları
+"""
+from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, ForeignKey, Index
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.sql import func
+import datetime
+
+Base = declarative_base()
+
+class Page(Base):
+    """Taranan web sayfalarının bilgilerini saklayan model"""
+    __tablename__ = 'pages'
+    
+    id = Column(Integer, primary_key=True)
+    url = Column(String(1024), unique=True, nullable=False)
+    url_hash = Column(String(32), unique=True, nullable=False, index=True)
+    title = Column(String(512), nullable=True)
+    content_type = Column(String(64), nullable=True)
+    full_text = Column(Text, nullable=True)
+    main_content = Column(Text, nullable=True)
+    hospital_info = Column(Text, nullable=True)
+    status_code = Column(Integer, nullable=True)
+    depth = Column(Integer, nullable=False, default=0)
+    crawled_at = Column(DateTime, default=datetime.datetime.utcnow)
+    last_modified = Column(DateTime, nullable=True)
+    error = Column(Text, nullable=True)
+    
+    # İndexler
+    __table_args__ = (
+        Index('idx_url_hash', url_hash),
+        Index('idx_crawled_at', crawled_at),
+    )
+    
+    def __repr__(self):
+        return f"<Page(url='{self.url}', crawled_at='{self.crawled_at}')>"
+
+
+class Link(Base):
+    """Sayfalar arası bağlantıları saklayan model"""
+    __tablename__ = 'links'
+    
+    id = Column(Integer, primary_key=True)
+    source_id = Column(Integer, ForeignKey('pages.id'), nullable=False)
+    target_url = Column(String(1024), nullable=False)
+    target_url_hash = Column(String(32), nullable=False)
+    is_internal = Column(Boolean, default=True)
+    is_crawled = Column(Boolean, default=False)
+    discovered_at = Column(DateTime, default=datetime.datetime.utcnow)
+    
+    # İndexler
+    __table_args__ = (
+        Index('idx_target_url_hash', target_url_hash),
+        Index('idx_source_target', source_id, target_url_hash),
+        Index('idx_not_crawled', is_crawled),
+    )
+    
+    def __repr__(self):
+        return f"<Link(source_id={self.source_id}, target_url='{self.target_url}')>"
+
+
+class CrawlSession(Base):
+    """Tarama oturumu bilgilerini saklayan model"""
+    __tablename__ = 'crawl_sessions'
+    
+    id = Column(Integer, primary_key=True)
+    base_url = Column(String(1024), nullable=False)
+    start_time = Column(DateTime, default=datetime.datetime.utcnow)
+    end_time = Column(DateTime, nullable=True)
+    pages_crawled = Column(Integer, default=0)
+    status = Column(String(32), default='running')  # running, completed, failed, paused
+    config = Column(Text, nullable=True)  # JSON olarak ayarlar
+    
+    def __repr__(self):
+        return f"<CrawlSession(id={self.id}, base_url='{self.base_url}', status='{self.status}')>"
+
+================================================================================
+# Dosya Yolu: ./database/__init__.py
+================================================================================
+
+"""
+Veritabanı modülleri
+"""
+from database.db_manager import DatabaseManager
+from database.models import Page, Link, CrawlSession, Base
+
+__all__ = ['DatabaseManager', 'Page', 'Link', 'CrawlSession', 'Base']
+
+================================================================================
+# Dosya Yolu: ./database/db_manager.py
+================================================================================
+
+"""
+Veritabanı bağlantı ve işlem yönetimi
+"""
+import json
+import logging
+from typing import Dict, List, Optional, Union, Any, Tuple
+import hashlib
+from urllib.parse import urlparse
+
+from sqlalchemy import create_engine, and_, func, select
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.future import select as future_select
+from sqlalchemy.exc import IntegrityError
+
+from database.models import Base, Page, Link, CrawlSession
+from config.settings import DATABASE_URL, BATCH_SIZE
+
+logger = logging.getLogger(__name__)
+
+# SQLite URL'lerini async uyumlu hale getir
+if DATABASE_URL.startswith('sqlite:///'):
+    ASYNC_DATABASE_URL = DATABASE_URL.replace('sqlite:///', 'sqlite+aiosqlite:///')
+else:
+    ASYNC_DATABASE_URL = DATABASE_URL
+
+
+class DatabaseManager:
+    """Veritabanı işlemlerini yöneten sınıf"""
+    
+    def __init__(self):
+        """DatabaseManager sınıfını başlat"""
+        self.engine = create_async_engine(ASYNC_DATABASE_URL)
+        self.session_maker = sessionmaker(
+            bind=self.engine, 
+            class_=AsyncSession, 
+            expire_on_commit=False
+        )
+        self.current_session_id = None
+        
+    async def init_db(self):
+        """Veritabanını başlat ve tabloları oluştur"""
+        async with self.engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            logger.info("Veritabanı tabloları oluşturuldu")
+    
+    async def start_crawl_session(self, base_url: str, config: Dict[str, Any] = None) -> int:
+        """Yeni bir tarama oturumu başlat"""
+        async with self.session_maker() as session:
+            # Önceki yarım kalmış oturumları kontrol et
+            stmt = future_select(CrawlSession).where(
+                and_(
+                    CrawlSession.base_url == base_url,
+                    CrawlSession.status.in_(['running', 'paused'])
+                )
+            )
+            result = await session.execute(stmt)
+            existing_session = result.scalars().first()
+            
+            if existing_session:
+                # Var olan oturumu devam ettir
+                existing_session.status = 'running'
+                self.current_session_id = existing_session.id
+                await session.commit()
+                logger.info(f"Mevcut tarama oturumu devam ettiriliyor: {existing_session.id}")
+                return existing_session.id
+            
+            # Yeni oturum oluştur
+            config_json = json.dumps(config) if config else None
+            new_session = CrawlSession(
+                base_url=base_url,
+                status='running',
+                config=config_json
+            )
+            session.add(new_session)
+            await session.commit()
+            
+            self.current_session_id = new_session.id
+            logger.info(f"Yeni tarama oturumu başlatıldı: {new_session.id}")
+            return new_session.id
+    
+    async def end_crawl_session(self, session_id: int, status: str = 'completed') -> None:
+        """Tarama oturumunu sonlandır"""
+        async with self.session_maker() as session:
+            stmt = future_select(CrawlSession).where(CrawlSession.id == session_id)
+            result = await session.execute(stmt)
+            crawl_session = result.scalars().first()
+            
+            if crawl_session:
+                # Tarama oturumunun durumunu ve bitiş zamanını güncelle
+                crawl_session.status = status
+                crawl_session.end_time = func.now()
+                
+                # Taranan sayfa sayısını güncelle
+                pages_count_stmt = select(func.count()).select_from(Page).where(
+                    Page.crawled_at >= crawl_session.start_time
+                )
+                pages_count = await session.execute(pages_count_stmt)
+                crawl_session.pages_crawled = pages_count.scalar()
+                
+                await session.commit()
+                logger.info(f"Tarama oturumu sonlandırıldı: {session_id}, Durum: {status}")
+            else:
+                logger.warning(f"Sonlandırılacak tarama oturumu bulunamadı: {session_id}")
+    
+    async def pause_crawl_session(self, session_id: int) -> None:
+        """Tarama oturumunu duraklat"""
+        async with self.session_maker() as session:
+            stmt = future_select(CrawlSession).where(CrawlSession.id == session_id)
+            result = await session.execute(stmt)
+            crawl_session = result.scalars().first()
+            
+            if crawl_session:
+                crawl_session.status = 'paused'
+                await session.commit()
+                logger.info(f"Tarama oturumu duraklatıldı: {session_id}")
+            else:
+                logger.warning(f"Duraklatılacak tarama oturumu bulunamadı: {session_id}")
+    
+    @staticmethod
+    def get_url_hash(url: str) -> str:
+        """URL için benzersiz bir hash oluştur"""
+        return hashlib.md5(url.encode()).hexdigest()
+    
+    async def save_page(self, page_data: Dict[str, Any]) -> Optional[int]:
+        """Taranan sayfayı veritabanına kaydet"""
+        url = page_data.get('url')
+        url_hash = self.get_url_hash(url)
+        
+        async with self.session_maker() as session:
+            # Sayfa daha önce kaydedilmiş mi kontrol et
+            stmt = future_select(Page).where(Page.url_hash == url_hash)
+            result = await session.execute(stmt)
+            existing_page = result.scalars().first()
+            
+            if existing_page:
+                # Sayfa zaten var, sadece güncellenebilir
+                for key, value in page_data.items():
+                    if key != 'url' and key != 'url_hash' and hasattr(existing_page, key):
+                        setattr(existing_page, key, value)
+                
+                existing_page.crawled_at = func.now()
+                try:
+                    await session.commit()
+                    return existing_page.id
+                except Exception as e:
+                    await session.rollback()
+                    logger.error(f"Sayfa güncellenirken hata: {str(e)}")
+                    return None
+            
+            # Yeni sayfa ekle
+            new_page = Page(
+                url=url,
+                url_hash=url_hash,
+                title=page_data.get('title'),
+                content_type=page_data.get('content_type'),
+                full_text=page_data.get('full_text'),
+                main_content=page_data.get('main_content'),
+                hospital_info=page_data.get('hospital_info'),
+                status_code=page_data.get('status_code'),
+                depth=page_data.get('depth', 0),
+                last_modified=page_data.get('last_modified'),
+                error=page_data.get('error')
+            )
+            
+            try:
+                session.add(new_page)
+                await session.commit()
+                return new_page.id
+            except IntegrityError:
+                await session.rollback()
+                logger.warning(f"Sayfa zaten mevcut: {url}")
+                # Yeniden sorgula ve ID'yi döndür
+                stmt = future_select(Page).where(Page.url_hash == url_hash)
+                result = await session.execute(stmt)
+                existing_page = result.scalars().first()
+                return existing_page.id if existing_page else None
+            except Exception as e:
+                await session.rollback()
+                logger.error(f"Sayfa kaydedilirken hata: {str(e)}")
+                return None
+    
+    async def save_links(self, source_page_id: int, links: List[Dict[str, Any]]) -> None:
+        """Bir sayfadan çıkarılan bağlantıları veritabanına kaydet"""
+        async with self.session_maker() as session:
+            # Toplu işlem için
+            try:
+                for i in range(0, len(links), BATCH_SIZE):
+                    batch = links[i:i+BATCH_SIZE]
+                    link_objects = []
+                    
+                    for link_data in batch:
+                        target_url = link_data.get('url')
+                        target_url_hash = self.get_url_hash(target_url)
+                        
+                        # Bağlantı nesnesini oluştur
+                        link_obj = Link(
+                            source_id=source_page_id,
+                            target_url=target_url,
+                            target_url_hash=target_url_hash,
+                            is_internal=link_data.get('is_internal', True),
+                            is_crawled=link_data.get('is_crawled', False)
+                        )
+                        link_objects.append(link_obj)
+                    
+                    # Toplu işlemi gerçekleştir
+                    if link_objects:
+                        session.add_all(link_objects)
+                        await session.commit()
+                
+                logger.info(f"Toplam {len(links)} bağlantı veritabanına kaydedildi")
+            except Exception as e:
+                await session.rollback()
+                logger.error(f"Bağlantılar kaydedilirken hata: {str(e)}")
+    
+    async def get_uncrawled_links(self, base_url: str, limit: int = 100) -> List[str]:
+        """Taranmamış bağlantıları getir"""
+        base_domain = urlparse(base_url).netloc
+        
+        async with self.session_maker() as session:
+            # İç bağlantılardan taranmamış olanları seç
+            stmt = future_select(Link.target_url).where(
+                and_(
+                    Link.is_internal == True,
+                    Link.is_crawled == False
+                )
+            ).limit(limit)
+            
+            result = await session.execute(stmt)
+            links = result.scalars().all()
+            
+            # Sadece base_url ile aynı domain'e ait olanları filtrele
+            filtered_links = [
+                link for link in links 
+                if urlparse(link).netloc == base_domain
+            ]
+            
+            return filtered_links
+    
+    async def mark_link_as_crawled(self, url: str) -> None:
+        """Bir bağlantıyı taranmış olarak işaretle"""
+        url_hash = self.get_url_hash(url)
+        
+        async with self.session_maker() as session:
+            stmt = future_select(Link).where(Link.target_url_hash == url_hash)
+            result = await session.execute(stmt)
+            links = result.scalars().all()
+            
+            for link in links:
+                link.is_crawled = True
+            
+            await session.commit()
+    
+    async def url_exists(self, url: str) -> bool:
+        """URL veritabanında kayıtlı mı kontrol et"""
+        url_hash = self.get_url_hash(url)
+        
+        async with self.session_maker() as session:
+            # Hem sayfalar hem de bağlantılar arasında kontrol et
+            page_stmt = future_select(Page).where(Page.url_hash == url_hash)
+            page_result = await session.execute(page_stmt)
+            page_exists = page_result.scalars().first() is not None
+            
+            if page_exists:
+                return True
+            
+            link_stmt = future_select(Link).where(Link.target_url_hash == url_hash)
+            link_result = await session.execute(link_stmt)
+            link_exists = link_result.scalars().first() is not None
+            
+            return link_exists
+    
+    async def get_crawl_stats(self, session_id: Optional[int] = None) -> Dict[str, Any]:
+        """Tarama istatistiklerini getir"""
+        if not session_id and self.current_session_id:
+            session_id = self.current_session_id
+        
+        stats = {
+            'total_pages': 0,
+            'total_links': 0,
+            'crawled_links': 0,
+            'session_info': None
+        }
+        
+        async with self.session_maker() as session:
+            # Toplam sayfa sayısını hesapla
+            pages_count_stmt = select(func.count()).select_from(Page)
+            pages_count = await session.execute(pages_count_stmt)
+            stats['total_pages'] = pages_count.scalar()
+            
+            # Toplam ve taranmış bağlantı sayısını hesapla
+            links_count_stmt = select(func.count()).select_from(Link)
+            links_count = await session.execute(links_count_stmt)
+            stats['total_links'] = links_count.scalar()
+            
+            crawled_links_stmt = select(func.count()).select_from(Link).where(Link.is_crawled == True)
+            crawled_links = await session.execute(crawled_links_stmt)
+            stats['crawled_links'] = crawled_links.scalar()
+            
+            # Oturum bilgisini getir
+            if session_id:
+                stmt = future_select(CrawlSession).where(CrawlSession.id == session_id)
+                result = await session.execute(stmt)
+                session_info = result.scalars().first()
+                
+                if session_info:
+                    stats['session_info'] = {
+                        'id': session_info.id,
+                        'base_url': session_info.base_url,
+                        'start_time': session_info.start_time.isoformat() if session_info.start_time else None,
+                        'end_time': session_info.end_time.isoformat() if session_info.end_time else None,
+                        'pages_crawled': session_info.pages_crawled,
+                        'status': session_info.status
+                    }
+            
+            return stats
+    
+    async def close(self):
+        """Veritabanı bağlantısını kapat"""
+        await self.engine.dispose()

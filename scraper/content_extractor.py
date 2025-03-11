@@ -52,7 +52,7 @@ class ContentExtractor:
             main_content, hospital_info = self._extract_specific_content(soup)
             
             # Tüm metni al
-            full_text = soup.get_text(separator='\n', strip=True)
+            full_text = soup.get_text(separator='\n', strip=False)
             
             # Bağlantıları çıkar
             links = self._extract_links(soup, url)
@@ -77,16 +77,11 @@ class ContentExtractor:
                 'url': url,
                 'error': str(e)
             }
-    
+
+                
     def _extract_specific_content(self, soup: BeautifulSoup) -> Tuple[Optional[str], Optional[str]]:
         """
-        Belirli içerikleri çıkar
-        
-        Args:
-            soup: BeautifulSoup nesnesi
-        
-        Returns:
-            Tuple[Optional[str], Optional[str]]: (ana_içerik, hastane_bilgisi) ikilisi
+        Belirli içerikleri çıkarırken kelimelerin birleşmemesini sağla
         """
         main_content = None
         hospital_info = None
@@ -95,13 +90,27 @@ class ContentExtractor:
         if self.main_content_selector:
             main_content_element = soup.select_one(self.main_content_selector)
             if main_content_element:
-                main_content = main_content_element.get_text(strip=False)
+                # HTML içindeki metin düğümlerini topla ve aralarında boşluk bırak
+                texts = []
+                for elem in main_content_element.find_all(text=True):
+                    if elem.strip():
+                        texts.append(elem.strip())
+                
+                # Metin parçalarını birleştir, ancak boşluk ekleyerek
+                main_content = " ".join(texts)
         
         # Hastane bilgisini çıkar
         if self.hospital_info_selector:
             hospital_info_element = soup.select_one(self.hospital_info_selector)
             if hospital_info_element:
-                hospital_info = hospital_info_element.get_text(strip=False)
+                # HTML içindeki metin düğümlerini topla ve aralarında boşluk bırak
+                texts = []
+                for elem in hospital_info_element.find_all(text=True):
+                    if elem.strip():
+                        texts.append(elem.strip())
+                
+                # Metin parçalarını birleştir, ancak boşluk ekleyerek
+                hospital_info = " ".join(texts)
         
         return main_content, hospital_info
     
@@ -123,7 +132,7 @@ class ContentExtractor:
         
         # Tüm <a> etiketlerini işle
         for a_tag in soup.find_all('a', href=True):
-            href = a_tag.get('href', '').strip()
+            href = a_tag.get('href', '')#.strip()
             
             # Boş veya javascript bağlantılarını atla
             if not href or href.startswith('javascript:') or href.startswith('#'):
@@ -136,7 +145,7 @@ class ContentExtractor:
             is_internal = urlparse(base_url).netloc == urlparse(full_url).netloc
             
             # Bağlantı metnini al
-            link_text = a_tag.get_text(strip=True)
+            link_text = a_tag.get_text(strip=False)
             
             links.append({
                 'url': full_url,

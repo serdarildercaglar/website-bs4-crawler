@@ -118,40 +118,44 @@ class URLManager:
             return parsed.netloc == self.base_domain
         except:
             return False
-    
+        
     def should_crawl(self, url: str) -> bool:
-        """
-        URL'nin taranması gerekip gerekmediğini kontrol et
-        
-        Args:
-            url: Kontrol edilecek URL
-        
-        Returns:
-            bool: Taranması gerekiyorsa True, gerekmiyorsa False
-        """
-        # URL'nin geçerli olduğunu kontrol et
-        if not self.is_valid_url(url):
-            return False
-        
-        # İç bağlantı olduğunu kontrol et
-        if not self.is_internal_url(url):
-            return False
-        
-        # Daha önce ziyaret edildiğini kontrol et
-        normalized_url = self.normalize_url(url)
-        if normalized_url in self.visited_urls:
-            return False
-        
-        url_hash = self.get_url_hash(url)
-        if url_hash in self.visited_hashes:
-            return False
-        
-        # Dosya uzantısını kontrol et
-        _, ext = self.get_url_extension(url)
-        if ext and ext.lower() in self.excluded_extensions:
-            return False
-        
-        return True
+            """
+            URL'nin taranması gerekip gerekmediğini kontrol et
+            
+            Args:
+                url: Kontrol edilecek URL
+            
+            Returns:
+                bool: Taranması gerekiyorsa True, gerekmiyorsa False
+            """
+            # Özel protokolleri kontrol et
+            if url.startswith(('mailto:', 'tel:', 'sms:', 'whatsapp:', 'intent:', 'javascript:')):
+                return False
+                
+            # URL'nin geçerli olduğunu kontrol et
+            if not self.is_valid_url(url):
+                return False
+            
+            # İç bağlantı olduğunu kontrol et
+            if not self.is_internal_url(url):
+                return False
+            
+            # Daha önce ziyaret edildiğini kontrol et
+            normalized_url = self.normalize_url(url)
+            if normalized_url in self.visited_urls:
+                return False
+            
+            url_hash = self.get_url_hash(url)
+            if url_hash in self.visited_hashes:
+                return False
+            
+            # Dosya uzantısını kontrol et
+            _, ext = self.get_url_extension(url)
+            if ext and ext.lower() in self.excluded_extensions:
+                return False
+            
+            return True
     
     def mark_as_visited(self, url: str) -> None:
         """

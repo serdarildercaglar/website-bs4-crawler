@@ -32,8 +32,8 @@ IMPORTANT_URL_PARAMS = set(os.getenv("IMPORTANT_URL_PARAMS", "id,page,category")
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "100"))  # Veritabanına toplu yazma için
 
 # İçerik seçiciler
-MAIN_CONTENT_SELECTOR = os.getenv("MAIN_CONTENT_SELECTOR", "section.pages-content")
-HOSPITAL_INFO_SELECTOR = os.getenv("HOSPITAL_INFO_SELECTOR", "div#header-middle-content")
+MAIN_CONTENT_SELECTOR = "section.pages-content"  # Ana içerik için
+HOSPITAL_INFO_SELECTOR = "#header-middle-content"  # Hastane bilgisi için
 
 # Logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

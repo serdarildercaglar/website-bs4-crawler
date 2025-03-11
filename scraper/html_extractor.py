@@ -11,6 +11,32 @@ from config.settings import MAIN_CONTENT_SELECTOR, HOSPITAL_INFO_SELECTOR
 
 logger = logging.getLogger(__name__)
 
+import re
+
+def clean_text(self, text: str) -> str:
+    """
+    Metni temizle ancak kelime aralarındaki boşlukları koru
+    """
+    if not text:
+        return ""
+    
+    # HTML etiketlerini boşluklarla değiştir (silmek yerine)
+    text = re.sub(r'<[^>]+>', ' ', text)
+    
+    # Satır sonlarını boşluklara dönüştür ama tamamen kaldırma
+    # Bu sayede kelimeler satır sonlarında birleşmeyecek
+    text = text.replace('\n', ' ')
+    
+    # Çoklu boşlukları tek boşluğa indirgeme (isteğe bağlı)
+    # text = re.sub(r'\s{2,}', ' ', text)
+    
+    # Noktalama işaretlerinden sonra boşluk ekleyin
+    # Ama zaten boşluk varsa eklemeyin
+    text = re.sub(r'([.,!?:;])([^\s])', r'\1 \2', text)
+    
+    return text
+
+
 class HTMLExtractor(ContentExtractor):
     """HTML sayfalarını işlemek için gelişmiş sınıf"""
     
@@ -26,46 +52,56 @@ class HTMLExtractor(ContentExtractor):
         super().__init__(main_content_selector, hospital_info_selector)
     
     def extract_content(self, html: str, url: str) -> Dict[str, Any]:
-        """
-        HTML içeriğinden gelişmiş metin ve yapı çıkarma
-        
-        Args:
-            html: HTML içeriği
-            url: Sayfanın URL'si
-        
-        Returns:
-            Dict[str, Any]: Çıkarılan içerik
-        """
-        # Temel içerik çıkarma
-        content = super().extract_content(html, url)
-        
         try:
             soup = BeautifulSoup(html, 'html.parser')
             
-            # Ek içerikleri çıkar
-            content.update({
-                'meta_description': self._extract_meta_description(soup),
-                'meta_keywords': self._extract_meta_keywords(soup),
-                'headings': self._extract_headings(soup),
-                'images': self._extract_images(soup, url),
-                'content_type': 'text/html'
-            })
+            # Script ve stil içeriklerini kaldır
+            for script_or_style in soup(['script', 'style', 'noscript', 'iframe']):
+                script_or_style.decompose()
+            
+            # Sayfa başlığını al
+            title = None
+            title_tag = soup.find('title')
+            if title_tag:
+                title = title_tag.get_text(strip=True)
+            
+            # Ana içeriği ve hastane bilgisini al
+            main_content, hospital_info = self._extract_specific_content(soup)
             
             # İçeriği temizle ve düzenle
-            if content['full_text']:
-                content['full_text'] = self._clean_text(content['full_text'])
+            if main_content:
+                main_content = self.clean_text(main_content)
             
-            if content['main_content']:
-                content['main_content'] = self._clean_text(content['main_content'])
+            if hospital_info:
+                hospital_info = self.clean_text(hospital_info)
             
-            if content['hospital_info']:
-                content['hospital_info'] = self._clean_text(content['hospital_info'])
+            # Tüm metni al
+            full_text = soup.get_text(separator='\n', strip=True)
+            full_text = self.clean_text(full_text)
             
-            return content
+            # Bağlantıları çıkar
+            links = self._extract_links(soup, url)
+            
+            return {
+                'title': title,
+                'full_text': full_text,
+                'main_content': main_content,
+                'hospital_info': hospital_info,
+                'links': links,
+                'url': url
+            }
         
         except Exception as e:
-            logger.error(f"Gelişmiş HTML çıkarma hatası ({url}): {str(e)}")
-            return content
+            logger.error(f"İçerik çıkarma hatası ({url}): {str(e)}")
+            return {
+                'title': None,
+                'full_text': None,
+                'main_content': None,
+                'hospital_info': None,
+                'links': [],
+                'url': url,
+                'error': str(e)
+            }
     
     @staticmethod
     def _extract_meta_description(soup: BeautifulSoup) -> Optional[str]:
@@ -115,7 +151,7 @@ class HTMLExtractor(ContentExtractor):
             for heading in soup.find_all(f'h{level}'):
                 headings.append({
                     'level': level,
-                    'text': heading.get_text(strip=True)
+                    'text': heading.get_text(strip=False)
                 })
         return headings
     
@@ -154,32 +190,38 @@ class HTMLExtractor(ContentExtractor):
             })
         
         return images
-    
+
     @staticmethod
-    def _clean_text(text: str) -> str:
-        """
-        Metni temizle ve düzenle
-        
-        Args:
-            text: Temizlenecek metin
-        
-        Returns:
-            str: Temizlenmiş metin
-        """
+    def clean_text(text):
         if not text:
             return ""
         
-        # Fazla boşlukları temizle
-        text = re.sub(r'\s+', ' ', text)
+        # HTML etiketlerini kaldır (boşluk bırakarak)
+        text = re.sub(r'<[^>]+>', ' ', text)
         
-        # Çoklu satır sonlarını temizle
-        text = re.sub(r'\n\s*\n+', '\n\n', text)
+        # Özel içerik işaretleyicilerini kaldır
+        text = re.sub(r'#\d+ *anahlı dal içerik başlıyor: *\[versiyon *: *\d+\]', ' ', text)
+        text = re.sub(r'#+ *\d+ *anahlı dal içerik (başlıyor|bitti) *#+', ' ', text)
         
-        # Başlangıç ve sondaki boşlukları temizle
-        text = text.strip()
+        # Sayfa yapı bilgilerini kaldır
+        text = re.sub(r'SiteAgacDallar:[\d\.]+', ' ', text)
+        text = re.sub(r'container|page-content-(header|body|footer)', ' ', text)
         
-        return text
-    
+        # Türkçe unvan kısaltmalarından sonra uygun boşluk bırak
+        text = re.sub(r'(Dr|Uzm|Prof|Doç)\.\s*([A-ZÇĞİÖŞÜ])', r'\1. \2', text)
+        
+        # Büyük harfle başlayan kelimelerden önce boşluk olduğundan emin ol 
+        # (ama kısaltmalardan sonra gelenleri etkileme)
+        text = re.sub(r'([a-zçğıöşü])([A-ZÇĞİÖŞÜ])', r'\1 \2', text)
+        
+        # Gereksiz boşlukları temizle (ama tamamen kaldırma)
+        text = re.sub(r'\s{2,}', ' ', text)
+        
+        return text.strip()
+
+
+
+
     def extract_structured_data(self, html: str) -> Dict[str, Any]:
         """
         HTML'deki yapılandırılmış verileri çıkar (JSON-LD, microdata vb.)
